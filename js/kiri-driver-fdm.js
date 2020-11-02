@@ -58,6 +58,7 @@ let gs_kiri_fdm = exports;
      * @param {Function} ondone (called when complete with an array of Slice objects)
      */
     function slice(settings, widget, onupdate, ondone) {
+        // return;
         fixExtruders(settings);
         let spro = settings.process,
             sdev = settings.device,
@@ -100,10 +101,56 @@ let gs_kiri_fdm = exports;
             minHeight: sliceHeight > spro.sliceMinHeight ? spro.sliceMinHeight : 0,
             firstHeight: spro.firstSliceHeight,
             view: view
-        }, onSliceDone, onSliceUpdate);
+        }, onSliceDone, onSliceUpdate, onScrapDone, onScrapUpdate, widget.isScrap);
+
 
         function onSliceUpdate(update) {
             return onupdate(0.0 + update * 0.5);
+        }
+
+        function onScrapUpdate(update) {
+            return onupdate(0.0 + update * 0.25);
+        }
+
+        function onScrapDone(slices) {
+            // LWW TODO
+            // console.log("ScrapSliceDone");
+            slices = slices.filter(slice => slice.tops.length);
+            if (!slices) return;
+
+            // for each slice, performe a function and call doupdate()
+            function forSlices(from, to, fn, msg) {
+                slices.forEach(function(slice) {
+                    fn(slice);
+                    // doupdate(slice.index, from, to, msg)
+                });
+            }
+
+            // reset (if necessary) for solids and support projections
+            slices.forEach(function(slice) {
+                slice.extruder = extruder;
+                slice.invalidateFill();
+                slice.invalidateSolids();
+                slice.invalidateSupports();
+            });
+
+            // create shells and diff inner fillable areas
+            forSlices(0.0, 0.2, function(slice) {
+                let solid = (
+                        slice.index < spro.sliceBottomLayers ||
+                        slice.index > slices.length - spro.sliceTopLayers-1 ||
+                        spro.sliceFillSparse > 0.95
+                    ) && !vaseMode;
+                slice.doShells(1, 0, 0, fillOffset, { // LWW TODO set offset to 0? and shells to 1? 
+                    vase: vaseMode,
+                    thin: false && spro.detectThinWalls
+                });
+                if (solid) slice.doSolidLayerFill(fillSpacing, sliceFillAngle);
+                sliceFillAngle += 90.0;
+            }, "offsets");
+
+            // ondone();
+
         }
 
         function onSliceDone(slices) {
@@ -476,7 +523,7 @@ let gs_kiri_fdm = exports;
                         // tweak bounds for fill to induce an offset
                         t.inner[0].bounds.minx -= nozzle/2;
                         t.inner[0].bounds.maxx += nozzle/2;
-                        t.fill_lines = POLY.fillArea(t.inner, angle, spacing, []);
+                        t.fill_lines = POLY.fillArea(t.inner, null, angle, spacing, []);
                     })
                     offset.z = slice.z;
                     printPoint = print.slicePrintPath(slice, printPoint, offset, layerout, {
@@ -814,6 +861,7 @@ let gs_kiri_fdm = exports;
             bytes = 0;
 
         (process.gcodePauseLayers || "").split(",").forEach(function(lv) {
+            // (process.gcodePause || "").split(",").forEach(function(lv) {
             let v = parseInt(lv);
             if (v >= 0) pause.push(v);
         });
@@ -970,7 +1018,23 @@ let gs_kiri_fdm = exports;
             subst.layer = layer;
             subst.height = path.height.toFixed(3);
 
-            if (pauseCmd && pause.indexOf(layer) >= 0) {
+            // LWW TODO: Fix loading this from the device/printer file 
+            if (true) {
+                pauseCmd = [];
+                pauseCmd.push("; Stopping now!");
+                pauseCmd.push("M300 S1200 P100 ; beep three times");
+                pauseCmd.push("M300 S0 P100");
+                pauseCmd.push("M300 S1200 P100");
+                pauseCmd.push("M300 S0 P100");
+                pauseCmd.push("M300 S1200 P100");
+                pauseCmd.push("M300 S0 P100");
+                pauseCmd.push("G1 X2.500 Y207.870 Z200.000; parking position for easy access");
+                pauseCmd.push("M1 Insert scrap now; user stop");
+                pauseCmd.push("; M105; return to current temp");
+                pauseCmd.push("M117 Insert scrap now");
+            }
+
+            if ((pauseCmd && pause.indexOf(layer) >= 0) || layer == process.sliceStopLayer) {
                 appendAllSub(pauseCmd)
             }
 

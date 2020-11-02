@@ -246,6 +246,7 @@ let gs_kiri_conf = exports;
                     sliceSolidMinArea: 1,
                     sliceSolidLayers: 3,
                     sliceBottomLayers: 3,
+                    sliceStopLayer: 999,
                     sliceTopLayers: 3,
                     firstSliceHeight: 0.25,
                     firstLayerRate: 30,
@@ -282,7 +283,7 @@ let gs_kiri_conf = exports;
                     sliceMinHeight: 0,
                     zHopDistance: 0.2,
                     antiBacklash: 1,
-                    gcodePause: "",
+                    gcodePauseLayers: "",
                     sliceRotation: 0
                 }
             },

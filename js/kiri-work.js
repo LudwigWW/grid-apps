@@ -14,6 +14,7 @@ let loc = self.location,
     seqid = 1,
     running = {},
     slicing = {},
+    clone = Object.clone,
     worker = null;
 
 function send(fn, data, onreply, async, zerocopy) {
@@ -106,12 +107,15 @@ KIRI.work = {
             widget.center();
         }
         slicing[widget.id] = callback;
+        console.log("work", widget.scrapDataArray);
+        const scrapDataC = clone(widget.scrapDataArray);
         send("slice", {
             id: widget.id,
             settings: settings,
             vertices: vertices,
             position: widget.mesh.position,
             tracking: widget.track,
+            scrapData: scrapDataC,
             snapshot: snapshot,
             // for rotation / unrotation
             state: {

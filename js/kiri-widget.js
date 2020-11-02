@@ -22,7 +22,8 @@ let gs_kiri_widget = exports;
         time = UTIL.time,
         solid_opacity = 1.0,
         nextId = 0,
-        groups = [];
+        groups = [],
+        clone = Object.clone;
 
     KIRI.Widget = Widget;
     KIRI.newWidget = newWidget;
@@ -105,6 +106,7 @@ let gs_kiri_widget = exports;
      * @constructor
      */
     function Widget(id,group) {
+        // console.log("Widget-KIRI", KIRI);
         this.id = id || new Date().getTime().toString(36)+(nextId++);
         this.group = group || [];
         this.group.push(this);
@@ -154,6 +156,8 @@ let gs_kiri_widget = exports;
         };
         this.saved = false;
         this.support = false; // is synthesized support widget
+        this.isScrap = false; // is a background scrap widget
+        this.scrapDataArray = KIRI.scraps;
     }
 
     /** ******************************************************************
@@ -374,6 +378,15 @@ let gs_kiri_widget = exports;
      */
     PRO.setPoints = function(points) {
         this.points = points || null;
+        return this;
+    };
+
+    /**
+     * @param {Stuff[]} scrapData
+     * @returns {Widget}
+     */
+    PRO.setScrapData = function(scrapData) {
+        this.scrapDataArray = scrapData || null;
         return this;
     };
 
@@ -602,6 +615,10 @@ let gs_kiri_widget = exports;
             this.bounds.setFromPoints(this.getPoints());
         }
         return this.bounds;
+    };
+
+    PRO.getScrapData = function() {
+        return this.scrapDataArray;
     };
 
     PRO.isModified = function() {
