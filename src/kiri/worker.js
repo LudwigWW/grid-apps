@@ -186,7 +186,10 @@ KIRI.worker = {
             });
         } catch (error) {
             send.data({error: error.toString()});
+            //send.data({error_stack: error.stack.toString()});
             console.log(error);
+            //console.log(error.stack);
+            //console.log(error_stack);
         }
     },
 

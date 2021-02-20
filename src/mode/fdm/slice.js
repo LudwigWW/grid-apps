@@ -939,6 +939,25 @@
             down_tops = down ? down.topPolys() : null,
             down_traces = down ? POLY.flatten(down.topShells().clone(true)) : null;
 
+        let bottom_slice = slice.down;
+        let last_bottom_slice;
+
+        // make test object polygons
+        function generateRectanglePolygon(start_x, start_y, start_z, length, width, rot) {
+            let rotation = rot * Math.PI / 180;
+            let point1 = newPoint(start_x, start_y, start_z);
+            let point2 = newPoint(start_x + length*Math.cos(rotation), start_y + length*Math.sin(rotation), start_z);
+            let point3 = newPoint(point2.x + width*Math.sin(-rotation), point2.y + width*Math.cos(-rotation), start_z);
+            let point4 = newPoint(start_x + width*Math.sin(-rotation), start_y + width*Math.cos(-rotation), start_z);
+            let rect_points = [point1, point2, point3, point4];
+            let rectanglePolygon = BASE.newPolygon(rect_points);
+            //rectanglePolygon.parent = top.poly;
+            rectanglePolygon.depth = 0;
+            rectanglePolygon.area2 = length * width * 2;
+            return rectanglePolygon;
+
+        }
+
         // check if point is supported by layer below
         function checkPointSupport(point) {
             // skip points close to other support points
@@ -1011,18 +1030,34 @@
         supports = POLY.trimTo(supports, shadow);
 
         let depth = 0;
+
         while (down && supports.length > 0) {
+            
             down.supports = down.supports || [];
 
-            let trimmed = [], culled = [];
+            let trimmed = [], culled = [], trimmed_before_books = [], collision_detection = [];
 
             // clip supports to shell offsets
             POLY.subtract(supports, down.topPolys(), trimmed, null, slice.z, min);
+            // console.log({trimmed_before_books: trimmed_before_books});
+            // POLY.subtract(trimmed_before_books, test_books_rectangle_list, trimmed, null, slice.z, min);
+            // console.log({trimmed: trimmed});
+
+            // console.log({down: down});
+            // console.log({down_toppolys: down.topPolys()});
+            // console.log({down_manual: down.tops[0].poly});
+
+            // POLY.subtract(down.topPolys(), test_books_rectangle_list, collision_detection, null, slice.z, min);
+            // console.log({new_area: collision_detection[0].areaDeep()});
+
+
 
             // set depth hint on support polys for infill density
+            //let support_one_poly_area = 0;
             trimmed.forEach(function(trim) {
                 // if (trim.area() < 0.1) return;
                 culled.push(trim.setZ(down.z));
+                //support_one_poly_area += (trim.areaDeep() * slice.height);
             });
 
             // exit when no more support polys exist
@@ -1034,9 +1069,295 @@
             }
 
             supports = culled;
+            //console.log({support_area: support_area});
+            //support_area += support_one_poly_area;
             down = down.down;
             depth++;
+
         }
+        //console.log({support_area: support_area});
+
+
+
+
+        let books = [];
+        books.push({width:100.5, length:152.7, height:10.9});
+        books.push({width:136.8, length:190.1, height:24.1});
+        // let test_books_rectangle_list = [generateRectanglePolygon(0, -20, slice.z, 5, 30, 0.0)];
+        // test_books_rectangle_list.push(generateRectanglePolygon(0, 10, slice.z, 2, 2, 0));
+        // test_books_rectangle_list.push(generateRectanglePolygon(0, 15, slice.z, 2, 2, 0));
+        // test_books_rectangle_list.push(generateRectanglePolygon(0, 20, slice.z, 2, 2, 0));
+        let test_books_rectangle_list = [];
+        console.log({test_books_rectangle_list: test_books_rectangle_list});
+        let support_area = 0;
+
+        while (bottom_slice) {
+            last_bottom_slice = bottom_slice;
+            bottom_slice = bottom_slice.down;
+        }
+        bottom_slice = last_bottom_slice;
+        console.log({bottom_slice: bottom_slice});
+        let up = bottom_slice, up_collision_check = bottom_slice;
+
+
+        let search_padding = 5;
+        // Search bounds
+        let min_x = bottom_slice.widget.bounds.min.x - search_padding;
+        let max_x = bottom_slice.widget.bounds.max.x + search_padding;
+        let min_y = bottom_slice.widget.bounds.min.y - search_padding;
+        let max_y = bottom_slice.widget.bounds.max.y + search_padding;
+        let repetition_goal = 1000;
+        let books_placed = [];
+        let try_x = 0;
+        let try_y = 0;
+        let try_z = 0;
+        let try_rotation = 0;
+        let try_book = 0;
+        let rotations = [0,45,90,135,180,225,270,315];
+
+
+        // Iterate, placing a book in every iteration
+        for (let books_to_place = 0; books_to_place < 4; books_to_place++) {
+            let place_one_book = {};
+
+            let found = false;
+            let repetition_counter = 0;
+            let epsilon_0_counter = 0;
+            let best_delta = 0;
+
+            // Start at bottom
+            up = bottom_slice;
+
+            // Try out random options to place books
+            while (found === false && repetition_counter < (Math.floor(repetition_goal / (1+books_placed.length)))) {
+                // Set walking slice to lowest slice
+                
+
+                // TODO: Remove after making sure volume check goes over all relevant slices
+                if (!up.supports || up.supports.length === 0) {
+                    up = up.up;
+                    repetition_counter++;
+                    console.log({going_up: "Going up because there were no supports on this slice my DUDE!!!!!!!"});
+                    continue;
+                }
+
+                let stack_on_book_index = Math.floor(Math.random() * (books_placed.length + 1)) - 1; // -1 to try to place it on buildplate
+                try_x = Math.random() * (max_x - min_x) + min_x;
+                try_y = Math.random() * (max_y - min_y) + min_y;
+                try_z = 0; // TODO: Convert height to slice number???
+                let layer_height = 0.00;
+                if (stack_on_book_index >= 0) {
+                    // console.log({books_placed:books_placed});
+                    // console.log({stack_on_book_index:stack_on_book_index});
+                    try_z = books_placed[stack_on_book_index].starting_height + books_placed[stack_on_book_index].book.height + layer_height;
+                }
+                try_rotation = rotations[Math.floor(Math.random() * rotations.length)];
+                try_book = books[Math.floor(Math.random() * books.length)];
+                let test_book_rectangle_list = [generateRectanglePolygon(try_x, try_y, up.z, try_book.length, try_book.width, try_rotation)];
+                let supports_after_surrogates = [];
+                let collision = false;
+                let new_volume = 0, old_volume = 0;
+
+                // Stability check
+                if (stack_on_book_index >= 0) {
+                    let unsupported_polygons = [];
+                    let unsupp_area = 0, full_area = 0;
+                    POLY.subtract(test_book_rectangle_list, books_placed[stack_on_book_index].geometry, unsupported_polygons, null, up.z, min);
+                    unsupported_polygons.forEach(function(unsupp) {
+                        unsupp_area += unsupp.area();
+                    });
+                    test_book_rectangle_list.forEach(function(full) {
+                        full_area += full.area();
+                    });
+
+                    // If less than half the area of the new book is supported by the book below, surrogate is unstable
+                    if ((unsupp_area * 2) > full_area) {
+                        repetition_counter++;
+                        continue;
+                    }
+                }
+
+                // TODO: Make this iterate over all relevant slices, skipping slices without support
+                // Get surrogate replaced volume
+                POLY.subtract(up.supports, test_book_rectangle_list, supports_after_surrogates, null, up.z, min);
+                supports_after_surrogates.forEach(function(supp) {
+                    new_volume += (supp.area() * up.height);
+                });
+                up.supports.forEach(function(supp) {
+                    old_volume += (supp.area() * up.height);
+                });
+                let delta = old_volume - new_volume;
+                
+                //console.log({delta_volume: delta});
+
+                // Only check collisions if the surrogate is useful
+                if (delta > best_delta) {
+                    up_collision_check = up;
+                    // Check for collision for the whole book size
+                    while (collision === false && up_collision_check && up_collision_check.z < (try_book.height + try_z)) {
+                        // Increase height until surrogate starting height is reached 
+                        if (up_collision_check.z < try_z) {
+                            up_collision_check = up_collision_check.up;
+                            // console.log({going_up: "Going up because book is not on buildplate my DUDE!!!!!!!"});
+                            continue;
+                        }
+
+                        // DON'T skip the layers, since we are looking for model polygons and previous surrogate supports
+                        // Skip layers without support
+                        // if (!up_collision_check.supports || up_collision_check.supports.length === 0) {
+                        //     up_collision_check = up_collision_check.up;
+                        //     console.log({going_up: "No support to check for collision found on this slice"});
+                        //     continue;
+                        // }
+
+                        let collision_detection = [];
+                        POLY.subtract(up_collision_check.topPolys(), test_book_rectangle_list, collision_detection, null, up_collision_check.z, min);
+                        
+                        let post_collision_area = 0, pre_collision_area = 0;
+                        up_collision_check.topPolys().forEach(function(top_poly) {
+                            pre_collision_area += top_poly.area();
+                        });
+                        collision_detection.forEach(function(top_poly) {
+                            post_collision_area += top_poly.area();
+                        });
+                        
+                        if (post_collision_area !== pre_collision_area) {
+                            collision = true;
+                            continue;
+                            //console.log({collision_true: post_collision_area - pre_collision_area});
+                        }
+
+                        // Check collision with already placed surrogates as well
+                        
+                        if (books_placed.length >= 1) {
+                            
+                            for (let idx = 0; idx < books_placed.length; idx++) {
+                                let previous_surrogate = books_placed[idx];
+
+                                if (up_collision_check.z <= (previous_surrogate.book.height + previous_surrogate.starting_height) && up_collision_check.z >= previous_surrogate.starting_height) {
+
+                                    collision_detection = [];
+                                    
+                                    POLY.subtract(test_book_rectangle_list, previous_surrogate.geometry, collision_detection, null, up_collision_check.z, min); // TODO: Check if Z matters
+                                    
+                                    post_collision_area = 0;
+                                    pre_collision_area = 0;
+                                    test_book_rectangle_list.forEach(function(top_poly) {
+                                        pre_collision_area += top_poly.area();
+                                    });
+                                    collision_detection.forEach(function(top_poly) {
+                                        post_collision_area += top_poly.area();
+                                    });
+                                    
+                                    if (post_collision_area !== pre_collision_area) {
+                                        collision = true;
+                                        continue;
+                                        //console.log({collision_true: post_collision_area - pre_collision_area});
+                                    }
+                                }
+                            }
+                        }
+
+                        // Step up
+                        up_collision_check = up_collision_check.up;
+                    }
+                }
+
+                // Check if better valid position was found
+                if (collision === false && delta > best_delta) {
+                    best_delta = delta;
+                    let lower_book = [];
+                    let empty_array = [];
+                    if (stack_on_book_index >= 0) {
+                        lower_book.push(books_placed[stack_on_book_index]);
+                    }
+                    place_one_book = {geometry:test_book_rectangle_list, book:try_book, starting_height:try_z, down:lower_book, up:empty_array, outlines_drawn:0};
+                }
+                else if (collision === false && delta === best_delta) {
+                    epsilon_0_counter++;
+                }
+
+                //console.log({best_delta:best_delta});
+
+                repetition_counter++;
+            }
+            console.log({best_delta:best_delta});
+            console.log({epsilon_0_counter:epsilon_0_counter});
+            //test_books_rectangle_list.push(place_one_book.geometry[0])
+            if (best_delta > 5) {
+                books_placed.push(place_one_book);
+            }
+        }
+
+        up = bottom_slice;
+        // For all slices
+        while (up) {
+            // If supports exist
+            if (up.supports && up.supports.length > 0) {
+                // For every book, surrogate the support
+                //var surrogate;
+                //for (surrogate in books_placed) {
+                for (let idx = 0; idx < books_placed.length; idx++) {
+                    let surrogate = books_placed[idx];
+                    // If the book is at this height
+                    if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
+                        let surrogated_supports = [];
+                        POLY.subtract(up.supports, surrogate.geometry, surrogated_supports, null, slice.z, min); // TODO: Collect book polygons and do it only once
+                        up.supports = surrogated_supports;
+                    }
+                }
+
+                // After surrogating all supports, draw their outlines
+                for (let idx = 0; idx < books_placed.length; idx++) {
+                    let surrogate = books_placed[idx];
+                    // If the book is at this height
+                    if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
+                        if (surrogate.outlines_drawn < 2) {
+                            // make surrogate bigger
+                            let surrogate_expanded = [];
+                            surrogate_expanded = POLY.expand(surrogate.geometry, 0.3, up.z, surrogate_expanded, 1);
+                            
+                            // subtract actual surrogate area to get only the outline
+                            let surrogate_outline_area_only = [];
+                            POLY.subtract(surrogate_expanded, surrogate.geometry, surrogate_outline_area_only, null, up.z, min);
+
+                            // Add outline to supports (will still be a double outline for now)
+                            up.supports.push(surrogate_outline_area_only[0]);
+                            console.log({surrogate_outline_area_only:surrogate_outline_area_only});
+
+                            //console.log({up_support:up.supports});
+                            //up.supports.push(surrogate.geometry[0]);
+                            //console.log({geometry:surrogate.geometry});
+                            surrogate.outlines_drawn++;
+                        }
+                        if (false) { //(surrogate.outlines_drawn >= 2 && surrogate.outlines_drawn <= 3) {
+                            let surrogate_outline = [];
+                            let surrogate_outline2 = [];
+                            surrogate_outline = POLY.expand(surrogate.geometry, 0.1, up.z, surrogate_outline, 1);
+
+                            let surrogate_outline_area_only = [];
+                            POLY.subtract(surrogate_outline, surrogate.geometry, surrogate_outline_area_only, null, slice.z, min);
+                            //POLY.expand(surrogate_outline, -0.2, up.z, surrogate_outline2);
+                            //surrogate_outline[0].setOpen(true);
+                            //surrogate_outline[0].points = surrogate_outline[0].points.slice(0, 3);
+                            console.log({surrogate_outline_area_only:surrogate_outline_area_only});
+                            //surrogate_outline[0].area2 = 0;
+                            
+                            //console.log({surrogate_outline2:surrogate_outline2});
+                            up.supports.push(surrogate_outline_area_only[0]);
+                            surrogate.outlines_drawn++;
+                            let up_top_zero = up.tops[0];
+                            if (!up_top_zero.fill_sparse) up_top_zero.fill_sparse = [];
+                            //up_top_zero.fill_sparse.appendAll(surrogate_outline);
+
+                        }
+                    }
+                }
+
+            }
+            up = up.up;
+        }
+        console.log({done:"done"});
     }
 
     /**
