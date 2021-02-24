@@ -302,6 +302,7 @@
                     sliceSolidLayers: 3,
                     sliceBottomLayers: 3,
                     sliceTopLayers: 3,
+                    sliceStopLayer: 999,
                     firstSliceHeight: 0.25,
                     firstLayerRate: 30,
                     firstLayerFillRate: 35,
@@ -343,7 +344,9 @@
                     sliceAdaptive: false,
                     zHopDistance: 0.2,
                     antiBacklash: 1,
-                    gcodePause: ""
+                    gcodePause: "",
+                    gcodePauseLayers: "",
+                    ranges: []
                 }
             },
             sla:{

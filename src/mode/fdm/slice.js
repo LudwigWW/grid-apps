@@ -326,7 +326,7 @@
             // belt supports are their own thing
             if (!isBelt && !isSynth && supportDensity && spro.sliceSupportEnable) {
                 forSlices(0.7, 0.8, slice => {
-                    doSupport(slice, spro, shadow);
+                    doSupport(slice, spro, shadow, settings);
                 }, "support");
                 forSlices(0.8, 0.9, slice => {
                     doSupportFill(slice, lineWidth, supportDensity, spro.sliceSupportArea);
@@ -916,7 +916,7 @@
     /**
      * calculate external overhangs requiring support
      */
-    function doSupport(slice, proc, shadow) {
+    function doSupport(slice, proc, shadow, settings) {
         let minOffset = proc.sliceSupportOffset,
             maxBridge = proc.sliceSupportSpan || 5,
             minArea = proc.supportMinArea,
@@ -957,6 +957,16 @@
             return rectanglePolygon;
 
         }
+
+        // Function to translate adding pause layers into a string for the UI (and the export parser)
+        function addPauseLayer(layer_number, settings) {
+            if (settings.process.gcodePauseLayers == null) settings.process.gcodePauseLayers = "";
+            if (settings.process.gcodePauseLayers != "") settings.process.gcodePauseLayers += ",";
+            settings.process.gcodePauseLayers += layer_number.toString();
+            console.log({pauselayer:layer_number});
+            console.log({pause_layers: settings.process.gcodePauseLayers});
+        }
+
 
         // check if point is supported by layer below
         function checkPointSupport(point) {
@@ -1081,8 +1091,44 @@
 
 
         let books = [];
-        books.push({width:100.5, length:152.7, height:10.9});
-        books.push({width:136.8, length:190.1, height:24.1});
+        // books.push({width:100.5, length:152.7, height:10.9});
+        // books.push({width:136.8, length:190.1, height:24.1});
+
+        function addOption(listOfOptions, length, width, height, title) {
+            listOfOptions.push({width:width, length:length, height:height, id:title, available:true});
+        }
+
+        function addStackableOptions(listOfOptions, initialHeight, addHeight, available, length, width, title) {
+            let stackHeight = initialHeight;
+            let stackedSoFar = 0;
+            while (stackHeight < settings.device.bedHeight && stackedSoFar < available) { 
+                addOption(listOfOptions, length, width, stackHeight, title);
+                stackHeight = stackHeight + addHeight;
+                stackedSoFar++;
+            }
+        }
+
+        addStackableOptions(books, 12.75, 9.55, 4, 31.85, 16, "Lego4x2Flat");
+        addStackableOptions(books, 3.33, 3.33, 9, 89.9, 93.8, "FloppyDisc");
+        addOption(books, 50.4, 24.95, 18.62, "wood_man");
+        addOption(books, 45.15, 23.35, 14.82, "dark_wood");
+        addOption(books, 25.05, 25.05, 18.8, "cube_with_dent");
+        addOption(books, 44.35, 18.33, 10.16, "wood_bar_dirty");
+        addOption(books, 97, 18.35, 11.18, "wood_bar_two_holes");
+        addOption(books, 100.75, 18.52, 12.2, "wood_bar_math");
+        addOption(books, 68.26, 50.46, 13.1, "wood_flat");
+        addOption(books, 51, 25, 18.55, "wood_man_hair");
+        addOption(books, 52.22, 24.9, 18.6, "wood_bar");
+        addOption(books, 24.4, 24.4, 24.4, "XYZ_cube_filled");
+        addOption(books, 27.31, 23.75, 10.55, "support_flat");
+        addOption(books, 73, 10.43, 9.5, "support_bar");
+        addOption(books, 73, 10.43, 9.5, "support_bar");
+        addOption(books, 183.5, 80.1, 14.7, "foam_plate");
+        addOption(books, 137.5, 55.57, 6.62, "wood_plate_small");
+        addOption(books, 208.8, 164, 6.66, "wood_plate_large");
+        addOption(books, 154.3, 105, 5.35, "saw_plate");
+        
+        
         // let test_books_rectangle_list = [generateRectanglePolygon(0, -20, slice.z, 5, 30, 0.0)];
         // test_books_rectangle_list.push(generateRectanglePolygon(0, 10, slice.z, 2, 2, 0));
         // test_books_rectangle_list.push(generateRectanglePolygon(0, 15, slice.z, 2, 2, 0));
@@ -1102,10 +1148,14 @@
 
         let search_padding = 5;
         // Search bounds
-        let min_x = bottom_slice.widget.bounds.min.x - search_padding;
-        let max_x = bottom_slice.widget.bounds.max.x + search_padding;
-        let min_y = bottom_slice.widget.bounds.min.y - search_padding;
-        let max_y = bottom_slice.widget.bounds.max.y + search_padding;
+        const min_x = bottom_slice.widget.bounds.min.x - search_padding;
+        const max_x = bottom_slice.widget.bounds.max.x + search_padding;
+        const min_y = bottom_slice.widget.bounds.min.y - search_padding;
+        const max_y = bottom_slice.widget.bounds.max.y + search_padding;
+        const bedDepthArea = settings.device.bedDepth / 2;
+        const bedWidthArea = settings.device.bedWidth / 2;
+        const shift_x = bottom_slice.widget.track.pos.x;
+        const shift_y = bottom_slice.widget.track.pos.y;
         let repetition_goal = 1000;
         let books_placed = [];
         let try_x = 0;
@@ -1115,21 +1165,36 @@
         let try_book = 0;
         let rotations = [0,45,90,135,180,225,270,315];
 
+        console.log({pause_layers: settings.process.gcodePauseLayers});
+
+        console.log({widget: bottom_slice.widget});
+        console.log({widget_pos: bottom_slice.widget.track.pos});
+        console.log({bedDepth: settings.device.bedDepth});
+
+        console.log({bedwidth: settings.device.bedWidth});
+
+        console.log({shift_x: shift_x});
+        console.log({shift_y: shift_y});
+
 
         // Iterate, placing a book in every iteration
         for (let books_to_place = 0; books_to_place < 4; books_to_place++) {
             let place_one_book = {};
 
-            let found = false;
+            
+            let sufficient = false; // TODO: Define what is sufficient to stop searching for better solutions
             let repetition_counter = 0;
             let epsilon_0_counter = 0;
             let best_delta = 0;
+            let best_layer_number = 0;
 
             // Start at bottom
             up = bottom_slice;
 
             // Try out random options to place books
-            while (found === false && repetition_counter < (Math.floor(repetition_goal / (1+books_placed.length)))) {
+            while (sufficient === false && repetition_counter < (Math.floor(repetition_goal / (1+books_placed.length)))) {
+                let good = true;
+
                 // Set walking slice to lowest slice
                 
 
@@ -1138,6 +1203,7 @@
                     up = up.up;
                     repetition_counter++;
                     console.log({going_up: "Going up because there were no supports on this slice my DUDE!!!!!!!"});
+                    good = false;
                     continue;
                 }
 
@@ -1145,11 +1211,11 @@
                 try_x = Math.random() * (max_x - min_x) + min_x;
                 try_y = Math.random() * (max_y - min_y) + min_y;
                 try_z = 0; // TODO: Convert height to slice number???
-                let layer_height = 0.00;
+                let layer_height_fudge = 0.00;
                 if (stack_on_book_index >= 0) {
                     // console.log({books_placed:books_placed});
                     // console.log({stack_on_book_index:stack_on_book_index});
-                    try_z = books_placed[stack_on_book_index].starting_height + books_placed[stack_on_book_index].book.height + layer_height;
+                    try_z = books_placed[stack_on_book_index].starting_height + books_placed[stack_on_book_index].book.height + layer_height_fudge;
                 }
                 try_rotation = rotations[Math.floor(Math.random() * rotations.length)];
                 try_book = books[Math.floor(Math.random() * books.length)];
@@ -1157,6 +1223,32 @@
                 let supports_after_surrogates = [];
                 let collision = false;
                 let new_volume = 0, old_volume = 0;
+
+                // Check if surrogate is available
+                if (try_book.available === false) {
+                    repetition_counter++;
+                    good = false;
+                    continue;
+                }
+
+                // Out of build-area check
+                for (let book_poly of test_book_rectangle_list) {
+                    // translate widget coordinate system to build plate coordinate system and compare with build plate size (center is at 0|0, bottom left is at -Width/2<|-Depth/2)
+                    if (book_poly.bounds.maxx + shift_x > bedWidthArea || book_poly.bounds.minx + shift_x < -bedWidthArea || book_poly.bounds.maxy + shift_y > bedDepthArea || book_poly.bounds.miny + shift_y < -bedDepthArea) {
+                        // console.log({text:"Out of build area"});
+                        // console.log({book_poly_bounds:book_poly.bounds})
+                        // console.log({y_max:book_poly.bounds.maxy + shift_y})
+                        // console.log({y_min:book_poly.bounds.miny + shift_y})
+                        // console.log({max_area:bedDepthArea})
+                        // console.log({min_area:-bedDepthArea})
+                        repetition_counter++;
+                        good = false;
+                        continue;
+                    }
+                    // else {
+                    //     console.log({text:"Fits"});
+                    // }
+                }
 
                 // Stability check
                 if (stack_on_book_index >= 0) {
@@ -1171,8 +1263,11 @@
                     });
 
                     // If less than half the area of the new book is supported by the book below, surrogate is unstable
-                    if ((unsupp_area * 2) > full_area) {
+                    //if ((unsupp_area * 2) > full_area) {
+                    // For now, use 100% support instead
+                    if (unsupp_area > 0) {
                         repetition_counter++;
+                        good = false;
                         continue;
                     }
                 }
@@ -1187,6 +1282,7 @@
                     old_volume += (supp.area() * up.height);
                 });
                 let delta = old_volume - new_volume;
+                let layer_number = 0;
                 
                 //console.log({delta_volume: delta});
 
@@ -1260,12 +1356,15 @@
 
                         // Step up
                         up_collision_check = up_collision_check.up;
+                        layer_number = up_collision_check.index;
                     }
+                    if (collision) good = false;
                 }
 
                 // Check if better valid position was found
-                if (collision === false && delta > best_delta) {
+                if (good === true && delta > best_delta) {
                     best_delta = delta;
+                    best_layer_number = layer_number;
                     let lower_book = [];
                     let empty_array = [];
                     if (stack_on_book_index >= 0) {
@@ -1273,7 +1372,7 @@
                     }
                     place_one_book = {geometry:test_book_rectangle_list, book:try_book, starting_height:try_z, down:lower_book, up:empty_array, outlines_drawn:0};
                 }
-                else if (collision === false && delta === best_delta) {
+                else if (good === true && delta === best_delta) {
                     epsilon_0_counter++;
                 }
 
@@ -1286,6 +1385,10 @@
             //test_books_rectangle_list.push(place_one_book.geometry[0])
             if (best_delta > 5) {
                 books_placed.push(place_one_book);
+                try_book.available = false; // Mark book as used
+
+                
+                addPauseLayer(best_layer_number, settings);
             }
         }
 
@@ -1315,7 +1418,7 @@
                         if (surrogate.outlines_drawn < 2) {
                             // make surrogate bigger
                             let surrogate_expanded = [];
-                            surrogate_expanded = POLY.expand(surrogate.geometry, 0.3, up.z, surrogate_expanded, 1);
+                            surrogate_expanded = POLY.expand(surrogate.geometry, 0.4, up.z, surrogate_expanded, 1);
                             
                             // subtract actual surrogate area to get only the outline
                             let surrogate_outline_area_only = [];

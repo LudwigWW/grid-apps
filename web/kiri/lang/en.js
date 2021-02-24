@@ -180,6 +180,8 @@ kiri.lang['en-us'] = {
     sl_lbot_l:      "number of solid layers\nto enforce at the\nbottom of the print",
     ad_adap_s:      "adaptive",
     ad_adap_l:      "use adaptive layer heights\nwith 'layer height' as max\nand 'layer min' as the min",
+    sl_lstp_s:      "stop layer",
+    sl_lstp_l:      "where to stop mid-print",
 
     // FDM SHELLS
     sl_shel_s:      "shell count",

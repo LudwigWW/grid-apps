@@ -1623,6 +1623,7 @@
             sliceTopLayers:      UC.newInput(LANG.sl_ltop_s, {title:LANG.sl_ltop_l, convert:UC.toInt, modes:FDM}),
             sliceSolidLayers:    UC.newInput(LANG.sl_lsld_s, {title:LANG.sl_lsld_l, convert:UC.toInt, modes:FDM}),
             sliceBottomLayers:   UC.newInput(LANG.sl_lbot_s, {title:LANG.sl_lbot_l, convert:UC.toInt, modes:FDM}),
+            sliceStopLayer:      UC.newInput(LANG.sl_lstp_s, {title:LANG.sl_lstp_l, convert:UC.toInt, modes:FDM}), // LWW
             fdmSep:              UC.newBlank({class:"pop-sep", modes:FDM}),
             sliceAdaptive:       UC.newBoolean(LANG.ad_adap_s, onBooleanClick, {title: LANG.ad_adap_l, modes:FDM, trigger: true}),
             detectThinWalls:     UC.newBoolean(LANG.ad_thin_s, onBooleanClick, {title: LANG.ad_thin_l, modes:FDM}),

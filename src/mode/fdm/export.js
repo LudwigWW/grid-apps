@@ -285,9 +285,30 @@
                 pos.z = zpos;
             }
 
-            if (pauseCmd && pause.indexOf(layer) >= 0) {
+            // if (pauseCmd && pause.indexOf(layer) >= 0) {
+            //     appendAllSub(pauseCmd)
+            // }
+            // LWW TODO: Fix loading this from the device/printer file 
+            if (true) {
+                pauseCmd = [];
+                pauseCmd.push("; Stopping now!");
+                pauseCmd.push("M300 S1200 P100 ; beep three times");
+                pauseCmd.push("M300 S0 P100");
+                pauseCmd.push("M300 S1200 P100");
+                pauseCmd.push("M300 S0 P100");
+                pauseCmd.push("M300 S1200 P100");
+                pauseCmd.push("M300 S0 P100");
+                pauseCmd.push("G1 X2.500 Y207.870 Z200.000; parking position for easy access");
+                pauseCmd.push("M1 Insert scrap now; user stop");
+                pauseCmd.push("; M105; return to current temp");
+                pauseCmd.push("M117 Insert scrap now");
+            }
+
+            // Append pause commands (including automatically generated pauses)
+            if ((pauseCmd && pause.indexOf(layer) >= 0) || layer == process.sliceStopLayer) {
                 appendAllSub(pauseCmd)
             }
+
 
             if (loops) {
                 if (inLoop) {

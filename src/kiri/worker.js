@@ -190,6 +190,7 @@ KIRI.worker = {
             console.log(error);
             //console.log(error.stack);
             //console.log(error_stack);
+            console.log({error_occured:"An error occured apparently."});
         }
     },
 

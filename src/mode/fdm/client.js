@@ -17,6 +17,10 @@
         boxes = {},
         func = {};
 
+    // LWW Todo: Add these to rangevars again
+    // "sliceStopLayer": LANG.sl_lstp_s, // Hack to make these values accessible after slicing / before exporting
+    // "gcodePauseLayers": LANG.ag_paws_s, // TODO: Delete this after settings get updated automatically
+
     FDM.init = function(kiri, api) {
         API = api;
         SPACE = api.const.SPACE;
