@@ -173,6 +173,8 @@
 
             widget.slices = slices;
 
+            console.log({all_slices:slices});
+
             if (!slices) {
                 return;
             }
@@ -325,9 +327,21 @@
 
             // belt supports are their own thing
             if (!isBelt && !isSynth && supportDensity && spro.sliceSupportEnable) {
+                let all_slices_new = [];
                 forSlices(0.7, 0.8, slice => {
-                    doSupport(slice, spro, shadow, settings);
+                    let check_slices = doSupport(slice, spro, shadow, settings, view);
+                    //console.log({all_slices_new:check_slices});
+                    if (check_slices) {
+                        if (check_slices.length > all_slices_new.length) {
+                            all_slices_new = check_slices;
+                        }
+                    }
                 }, "support");
+                
+                // LWW TODO: Possibly do this later
+                slices = all_slices_new;
+                widget.slices = slices;
+
                 forSlices(0.8, 0.9, slice => {
                     doSupportFill(slice, lineWidth, supportDensity, spro.sliceSupportArea);
                 }, "support");
@@ -349,6 +363,7 @@
                 widget.belt.midy = (bounds.miny + bounds.maxy) / 2;
             }
 
+            console.log({all_slices_finished:slices});
             // report slicing complete
             ondone();
         }
@@ -914,9 +929,96 @@
     };
 
     /**
+     * Calculate height range of the slice
+     * @return {float, float} top and bottom height of the slice 
+     */
+    function get_height_range(slice) {
+        let top_height = slice.z + slice.height/2;
+        let bottom_height = slice.z - slice.height/2;
+        return {top_height:top_height, bottom_height:bottom_height};
+    }
+
+    /**
+     * Calculate Z and height of slice based of target top and bottom heights
+     * @return {float, float} Z and Height of the slice 
+     */
+    function get_slice_height_values(top_height, bottom_height, force_droop_from_head_at_top_height) {
+        let height = top_height - bottom_height;
+        let z;
+        if (force_droop_from_head_at_top_height) z = top_height;// + 0.0042;
+        else z = (top_height + bottom_height) / 2;
+        return {z:z, height:height};
+    }
+
+    /**
+     * Determine the best slice to pause the print and insert the surrogate
+     * as well as how to adjust the surrounding slices to make the insertion smooth.
+     * Expands the surrogate object with the case info directly.
+     */
+    function check_surrogate_insertion_case(surrogate, first_search_slice, surrogate_settings) {
+        // Determine the insertion case for surrogate
+        let case_determined = false;
+        // console.log({Status:"Checking surrogate case handling"});
+        // console.log({surrogate:surrogate});
+        let iterate_layers_case_check = first_search_slice;
+        while (iterate_layers_case_check && !case_determined) {
+            let slice_height_range = get_height_range(iterate_layers_case_check);
+            // Case 1: Extend the printed layer
+            // The top end of the surrogate extends slightly into the new layer, or is perfectly on the same height
+            if (slice_height_range.bottom_height <= surrogate.end_height && (slice_height_range.bottom_height + surrogate_settings.min_squish_height) >= surrogate.end_height) {
+                // console.log({Status:"Case1 Extend printed layer"});
+                surrogate.insertion_data.insertion_case = "extend_printed_layer";
+                surrogate.insertion_data.max_height = surrogate.end_height;
+                surrogate.insertion_data.new_layer_index = iterate_layers_case_check.index;
+                if (iterate_layers_case_check.down) surrogate.insertion_data.printed_layer_index = iterate_layers_case_check.down.index;
+                else {
+                    console.log({WARNING:"Tried to save the slice of the printed layer, but none was found."})
+                    console.log({WARNING_additional_data:surrogate.insertion_data});
+                }
+                case_determined = true;
+            }
+            // Case 2: Extend the new layer
+            // The top end of the surrogate rests slightly below where the new layer would normally start
+            else if (slice_height_range.bottom_height > surrogate.end_height && (slice_height_range.bottom_height - surrogate_settings.max_droop_height) <= surrogate.end_height) {
+                // console.log({Status:"Case2 Extend new layer"});
+                surrogate.insertion_data.insertion_case = "extend_new_layer";
+                surrogate.insertion_data.min_height = surrogate.end_height;
+                surrogate.insertion_data.new_layer_index = iterate_layers_case_check.index;
+                if (iterate_layers_case_check.down) surrogate.insertion_data.printed_layer_index = iterate_layers_case_check.down.index;
+                else {
+                    console.log({WARNING:"Tried to save the slice of the printed layer, but none was found."})
+                    console.log({WARNING_additional_data:surrogate.insertion_data});
+                }
+                case_determined = true;
+            }
+            // Case 3: Insert new support layer
+            // The top of the surrogate is far below the start of the new layer, so we will add an additional (support-only) layer 
+            else if (iterate_layers_case_check.down) {
+                let down_slice_height_range = get_height_range(iterate_layers_case_check.down);
+                if (down_slice_height_range.bottom_height < surrogate.end_height && down_slice_height_range.top_height > surrogate.end_height) {
+                    // console.log({Status:"Case3 Insert new support layer"});
+                    surrogate.insertion_data.insertion_case = "Insert_new_support_layer";
+                    surrogate.insertion_data.min_height = surrogate.end_height;
+                    surrogate.insertion_data.original_supports = [];
+                    iterate_layers_case_check.down.supports.forEach(function(supp) {
+                        surrogate.insertion_data.original_supports.push(supp.clone(true)); // Save original supports
+                    });
+                    // console.log({surrogate_original_supports:surrogate.insertion_data.original_supports});
+                    surrogate.insertion_data.new_layer_index = iterate_layers_case_check.index;
+                    surrogate.insertion_data.printed_layer_index = iterate_layers_case_check.down.index;
+                    case_determined = true;
+                }
+            }
+            iterate_layers_case_check = iterate_layers_case_check.up;
+        }
+        if (!case_determined) console.log({WARNING:"WARNING: No case found for surrogate height handling."});
+        
+    }
+
+    /**
      * calculate external overhangs requiring support
      */
-    function doSupport(slice, proc, shadow, settings) {
+    function doSupport(slice, proc, shadow, settings, view) {
         let minOffset = proc.sliceSupportOffset,
             maxBridge = proc.sliceSupportSpan || 5,
             minArea = proc.supportMinArea,
@@ -942,8 +1044,18 @@
         let bottom_slice = slice.down;
         let last_bottom_slice;
 
+
+        function getSurrogateGeometryAtIndexHeight(surrogate, z_height, index) {
+            if (true) { // If surrogate is simple rectangular geometry
+                if (z_height >= surrogate.starting_height && z_height <= surrogate.end_height) {
+                    return surrogate.geometry;
+                }
+                else return [];
+            }
+        }
+
         // make test object polygons
-        function generateRectanglePolygon(start_x, start_y, start_z, length, width, rot) {
+        function generateRectanglePolygon(start_x, start_y, start_z, length, width, rot, padding) {
             let rotation = rot * Math.PI / 180;
             let point1 = newPoint(start_x, start_y, start_z);
             let point2 = newPoint(start_x + length*Math.cos(rotation), start_y + length*Math.sin(rotation), start_z);
@@ -954,17 +1066,18 @@
             //rectanglePolygon.parent = top.poly;
             rectanglePolygon.depth = 0;
             rectanglePolygon.area2 = length * width * 2;
-            return rectanglePolygon;
-
+            let rectanglePolygon_padded = [];
+            rectanglePolygon_padded = POLY.expand([rectanglePolygon], padding, start_z, rectanglePolygon_padded, 1); 
+            return rectanglePolygon_padded[0];
         }
 
         // Function to translate adding pause layers into a string for the UI (and the export parser)
-        function addPauseLayer(layer_number, settings) {
+        function addPauseLayer(insertion_layer_index, settings) {
             if (settings.process.gcodePauseLayers == null) settings.process.gcodePauseLayers = "";
             if (settings.process.gcodePauseLayers != "") settings.process.gcodePauseLayers += ",";
-            settings.process.gcodePauseLayers += layer_number.toString();
-            console.log({pauselayer:layer_number});
-            console.log({pause_layers: settings.process.gcodePauseLayers});
+            settings.process.gcodePauseLayers += insertion_layer_index.toString();
+            console.log({pauselayer:insertion_layer_index});
+            console.log({pause_layers:settings.process.gcodePauseLayers});
         }
 
 
@@ -1094,6 +1207,7 @@
         // books.push({width:100.5, length:152.7, height:10.9});
         // books.push({width:136.8, length:190.1, height:24.1});
 
+
         function addOption(listOfOptions, length, width, height, title) {
             listOfOptions.push({width:width, length:length, height:height, id:title, available:true});
         }
@@ -1101,7 +1215,7 @@
         function addStackableOptions(listOfOptions, initialHeight, addHeight, available, length, width, title) {
             let stackHeight = initialHeight;
             let stackedSoFar = 0;
-            while (stackHeight < settings.device.bedHeight && stackedSoFar < available) { 
+            while (stackHeight < settings.device.maxHeight && stackedSoFar < available) { 
                 addOption(listOfOptions, length, width, stackHeight, title);
                 stackHeight = stackHeight + addHeight;
                 stackedSoFar++;
@@ -1127,6 +1241,7 @@
         addOption(books, 137.5, 55.57, 6.62, "wood_plate_small");
         addOption(books, 208.8, 164, 6.66, "wood_plate_large");
         addOption(books, 154.3, 105, 5.35, "saw_plate");
+        addOption(books, 128.52, 68.25, 8.75, "medium_dense_foam_plate");
         
         
         // let test_books_rectangle_list = [generateRectanglePolygon(0, -20, slice.z, 5, 30, 0.0)];
@@ -1134,7 +1249,6 @@
         // test_books_rectangle_list.push(generateRectanglePolygon(0, 15, slice.z, 2, 2, 0));
         // test_books_rectangle_list.push(generateRectanglePolygon(0, 20, slice.z, 2, 2, 0));
         let test_books_rectangle_list = [];
-        console.log({test_books_rectangle_list: test_books_rectangle_list});
         let support_area = 0;
 
         while (bottom_slice) {
@@ -1145,6 +1259,7 @@
         console.log({bottom_slice: bottom_slice});
         let up = bottom_slice, up_collision_check = bottom_slice;
 
+        let surrogate_settings = {};
 
         let search_padding = 5;
         // Search bounds
@@ -1163,18 +1278,27 @@
         let try_z = 0;
         let try_rotation = 0;
         let try_book = 0;
+        let try_book_index = 0;
         let rotations = [0,45,90,135,180,225,270,315];
+        let layer_height_fudge = settings.process.sliceHeight/1.75;
+        let print_on_surrogate_extra_height_for_extrusion = 0;
+        surrogate_settings.surrogate_padding = 0.3;
+        surrogate_settings.min_squish_height = settings.process.sliceHeight/4;
+        surrogate_settings.max_droop_height = settings.process.sliceHeight/4;
+        surrogate_settings.minimum_clearance_height = settings.process.sliceHeight/4;
 
-        console.log({pause_layers: settings.process.gcodePauseLayers});
+        let first_placed = false;
 
-        console.log({widget: bottom_slice.widget});
-        console.log({widget_pos: bottom_slice.widget.track.pos});
-        console.log({bedDepth: settings.device.bedDepth});
+        console.log({pause_layers_start: settings.process.gcodePauseLayers});
 
-        console.log({bedwidth: settings.device.bedWidth});
+        // console.log({widget: bottom_slice.widget});
+        // console.log({widget_pos: bottom_slice.widget.track.pos});
+        // console.log({bedDepth: settings.device.bedDepth});
 
-        console.log({shift_x: shift_x});
-        console.log({shift_y: shift_y});
+        // console.log({bedwidth: settings.device.bedWidth});
+
+        // console.log({shift_x: shift_x});
+        // console.log({shift_y: shift_y});
 
 
         // Iterate, placing a book in every iteration
@@ -1185,16 +1309,16 @@
             let sufficient = false; // TODO: Define what is sufficient to stop searching for better solutions
             let repetition_counter = 0;
             let epsilon_0_counter = 0;
-            let best_delta = 0;
-            let best_layer_number = 0;
+            let best_delta_volume = 0;
+            let best_insertion_layer_number_guess = 0;
 
             // Start at bottom
             up = bottom_slice;
 
             // Try out random options to place books
-            while (sufficient === false && repetition_counter < (Math.floor(repetition_goal / (1+books_placed.length)))) {
+            while (sufficient === false && repetition_counter < (Math.floor(repetition_goal / (4)))) {
                 let good = true;
-
+                
                 // Set walking slice to lowest slice
                 
 
@@ -1211,18 +1335,22 @@
                 try_x = Math.random() * (max_x - min_x) + min_x;
                 try_y = Math.random() * (max_y - min_y) + min_y;
                 try_z = 0; // TODO: Convert height to slice number???
-                let layer_height_fudge = 0.00;
+                
                 if (stack_on_book_index >= 0) {
                     // console.log({books_placed:books_placed});
                     // console.log({stack_on_book_index:stack_on_book_index});
-                    try_z = books_placed[stack_on_book_index].starting_height + books_placed[stack_on_book_index].book.height + layer_height_fudge;
+                    try_z = books_placed[stack_on_book_index].starting_height + books_placed[stack_on_book_index].book.height;// + layer_height_fudge;
                 }
                 try_rotation = rotations[Math.floor(Math.random() * rotations.length)];
-                try_book = books[Math.floor(Math.random() * books.length)];
-                let test_book_rectangle_list = [generateRectanglePolygon(try_x, try_y, up.z, try_book.length, try_book.width, try_rotation)];
+                try_book_index = Math.floor(Math.random() * books.length)
+                try_book = books[try_book_index];
+                let test_book_rectangle_list = [generateRectanglePolygon(try_x, try_y, up.z, try_book.length, try_book.width, try_rotation, surrogate_settings.surrogate_padding)];
                 let supports_after_surrogates = [];
                 let collision = false;
                 let new_volume = 0, old_volume = 0;
+                let delta_volume = 0;
+                let insertion_layer_number_guess = 0;
+
 
                 // Check if surrogate is available
                 if (try_book.available === false) {
@@ -1231,10 +1359,15 @@
                     continue;
                 }
 
+
+                // Check that surrogates don't end on consecutive layers
+
+                
+
                 // Out of build-area check
                 for (let book_poly of test_book_rectangle_list) {
                     // translate widget coordinate system to build plate coordinate system and compare with build plate size (center is at 0|0, bottom left is at -Width/2<|-Depth/2)
-                    if (book_poly.bounds.maxx + shift_x > bedWidthArea || book_poly.bounds.minx + shift_x < -bedWidthArea || book_poly.bounds.maxy + shift_y > bedDepthArea || book_poly.bounds.miny + shift_y < -bedDepthArea) {
+                    if (book_poly.bounds.maxx + shift_x > bedWidthArea || book_poly.bounds.minx + shift_x < -bedWidthArea || book_poly.bounds.maxy + shift_y > bedDepthArea || book_poly.bounds.miny + shift_y < -bedDepthArea || try_z + try_book.height > settings.device.bedDepth) {
                         // console.log({text:"Out of build area"});
                         // console.log({book_poly_bounds:book_poly.bounds})
                         // console.log({y_max:book_poly.bounds.maxy + shift_y})
@@ -1245,9 +1378,6 @@
                         good = false;
                         continue;
                     }
-                    // else {
-                    //     console.log({text:"Fits"});
-                    // }
                 }
 
                 // Stability check
@@ -1272,45 +1402,73 @@
                     }
                 }
 
-                // TODO: Make this iterate over all relevant slices, skipping slices without support
                 // Get surrogate replaced volume
-                POLY.subtract(up.supports, test_book_rectangle_list, supports_after_surrogates, null, up.z, min);
-                supports_after_surrogates.forEach(function(supp) {
-                    new_volume += (supp.area() * up.height);
-                });
-                up.supports.forEach(function(supp) {
-                    old_volume += (supp.area() * up.height);
-                });
-                let delta = old_volume - new_volume;
-                let layer_number = 0;
-                
-                //console.log({delta_volume: delta});
+                let iterate_layers_over_surrogate_height = bottom_slice;
+                while (iterate_layers_over_surrogate_height) {
+                    // Skip layers that are under the start height of the surrogate
+                    if (iterate_layers_over_surrogate_height.z < try_z) { // Approximation: If more than half of the slice height is surrogated, we count it fully 
+                        iterate_layers_over_surrogate_height = iterate_layers_over_surrogate_height.up;
+                        continue;
+                    } 
 
-                // Only check collisions if the surrogate is useful
-                if (delta > best_delta) {
-                    up_collision_check = up;
-                    // Check for collision for the whole book size
-                    while (collision === false && up_collision_check && up_collision_check.z < (try_book.height + try_z)) {
+                    // Skip layers that have no supports
+                    else if (!iterate_layers_over_surrogate_height.supports || iterate_layers_over_surrogate_height.supports.length === 0) {
+                        iterate_layers_over_surrogate_height = iterate_layers_over_surrogate_height.up;
+                        continue;
+                    }
+                    // Stop counting volume surrogate height has passed 
+                    else {
+                        let slice_height_range = get_height_range(iterate_layers_over_surrogate_height);
+                        if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) >= (try_book.height + try_z)) {
+                            break;
+                        }
+                    }
+                    
+                    supports_after_surrogates = [];
+                    POLY.subtract(iterate_layers_over_surrogate_height.supports, test_book_rectangle_list, supports_after_surrogates, null, iterate_layers_over_surrogate_height.z, min);
+
+                    // console.log({supports_after_surrogates:supports_after_surrogates});
+                    // console.log({iterate_layers_over_surrogate_height_supports:iterate_layers_over_surrogate_height.supports});
+                    supports_after_surrogates.forEach(function(supp) {
+                        new_volume += Math.abs((supp.area() * iterate_layers_over_surrogate_height.height));
+                    });
+                    iterate_layers_over_surrogate_height.supports.forEach(function(supp) {
+                        old_volume += Math.abs((supp.area() * iterate_layers_over_surrogate_height.height));
+                    });
+                    iterate_layers_over_surrogate_height = iterate_layers_over_surrogate_height.up;
+                }
+                delta_volume = old_volume - new_volume;
+
+
+                // Check collisions 
+                // only if the surrogate is useful/better than last
+                if (delta_volume > best_delta_volume) {
+                    let iterate_layers_collision_check = up;
+
+                    // Check for collision for the whole surrogate height
+                    while (
+                        collision === false && iterate_layers_collision_check && // Stop after first collision found, or end of widget reached
+                        (get_height_range(iterate_layers_collision_check).bottom_height + surrogate_settings.min_squish_height) < (try_book.height + try_z)) { // stop checking when surrogate top is higher than slice bottom + min squish height 
                         // Increase height until surrogate starting height is reached 
-                        if (up_collision_check.z < try_z) {
-                            up_collision_check = up_collision_check.up;
+                        if (iterate_layers_collision_check.z < try_z) { // LWW TODO: Check at what height we actually want to start checking for collisions
+                            iterate_layers_collision_check = iterate_layers_collision_check.up;
                             // console.log({going_up: "Going up because book is not on buildplate my DUDE!!!!!!!"});
                             continue;
                         }
 
                         // DON'T skip the layers, since we are looking for model polygons and previous surrogate supports
                         // Skip layers without support
-                        // if (!up_collision_check.supports || up_collision_check.supports.length === 0) {
-                        //     up_collision_check = up_collision_check.up;
+                        // if (!iterate_layers_collision_check.supports || iterate_layers_collision_check.supports.length === 0) {
+                        //     iterate_layers_collision_check = iterate_layers_collision_check.up;
                         //     console.log({going_up: "No support to check for collision found on this slice"});
                         //     continue;
                         // }
 
                         let collision_detection = [];
-                        POLY.subtract(up_collision_check.topPolys(), test_book_rectangle_list, collision_detection, null, up_collision_check.z, min);
+                        POLY.subtract(iterate_layers_collision_check.topPolys(), test_book_rectangle_list, collision_detection, null, iterate_layers_collision_check.z, min);
                         
                         let post_collision_area = 0, pre_collision_area = 0;
-                        up_collision_check.topPolys().forEach(function(top_poly) {
+                        iterate_layers_collision_check.topPolys().forEach(function(top_poly) {
                             pre_collision_area += top_poly.area();
                         });
                         collision_detection.forEach(function(top_poly) {
@@ -1327,14 +1485,14 @@
                         
                         if (books_placed.length >= 1) {
                             
-                            for (let idx = 0; idx < books_placed.length; idx++) {
-                                let previous_surrogate = books_placed[idx];
+                            for (let books_placed_idx = 0; books_placed_idx < books_placed.length; books_placed_idx++) {
+                                let previous_surrogate = books_placed[books_placed_idx];
 
-                                if (up_collision_check.z <= (previous_surrogate.book.height + previous_surrogate.starting_height) && up_collision_check.z >= previous_surrogate.starting_height) {
+                                if (iterate_layers_collision_check.z <= (previous_surrogate.book.height + previous_surrogate.starting_height) && iterate_layers_collision_check.z >= previous_surrogate.starting_height) {
 
                                     collision_detection = [];
                                     
-                                    POLY.subtract(test_book_rectangle_list, previous_surrogate.geometry, collision_detection, null, up_collision_check.z, min); // TODO: Check if Z matters
+                                    POLY.subtract(test_book_rectangle_list, previous_surrogate.geometry, collision_detection, null, iterate_layers_collision_check.z, min); // TODO: Check if Z matters
                                     
                                     post_collision_area = 0;
                                     pre_collision_area = 0;
@@ -1355,44 +1513,89 @@
                         }
 
                         // Step up
-                        up_collision_check = up_collision_check.up;
-                        layer_number = up_collision_check.index;
+                        iterate_layers_collision_check = iterate_layers_collision_check.up;
+                        // insertion_layer_number_guess = iterate_layers_collision_check.index;
                     }
-                    if (collision) good = false;
+                    if (collision) {
+                        good = false;
+                        repetition_counter++;
+                        continue;
+                    }
+                }
+
+
+                // generate candidate and validation insertion case and layer
+                let lower_book = [];
+                let empty_array = [];
+                let data_array = {insertion_case:"unknown"};
+                if (stack_on_book_index >= 0) {
+                    lower_book.push(books_placed[stack_on_book_index]);
+                }
+                let end_height = try_z + try_book.height;
+                let candidate = {
+                    geometry:test_book_rectangle_list, 
+                    book:try_book, starting_height:try_z, 
+                    end_height:end_height, 
+                    down_surrogate:lower_book, 
+                    up_surrogate:empty_array, 
+                    outlines_drawn:0, 
+                    insertion_data:data_array
+                };
+                check_surrogate_insertion_case(candidate, bottom_slice, surrogate_settings);
+
+                // Check if it is on a consecutive layer from a previous surrogate
+                let consecutive = false;
+                books_placed.forEach(function(surrogate) {
+                    if (Math.abs(candidate.insertion_data.index - surrogate.insertion_data.index) === 1) {
+                        consecutive = true;
+                    }
+                });
+                if (consecutive) {
+                    good = false;
+                    repetition_counter++;
+                    continue;
                 }
 
                 // Check if better valid position was found
-                if (good === true && delta > best_delta) {
-                    best_delta = delta;
-                    best_layer_number = layer_number;
-                    let lower_book = [];
-                    let empty_array = [];
-                    if (stack_on_book_index >= 0) {
-                        lower_book.push(books_placed[stack_on_book_index]);
-                    }
-                    place_one_book = {geometry:test_book_rectangle_list, book:try_book, starting_height:try_z, down:lower_book, up:empty_array, outlines_drawn:0};
+                if (good === true && delta_volume > best_delta_volume) {
+                    best_delta_volume = delta_volume;
+                    place_one_book = candidate;
                 }
-                else if (good === true && delta === best_delta) {
-                    epsilon_0_counter++;
+                // If it is just as good --> choose the bigger one
+                else if (good === true && delta_volume === best_delta_volume && delta_volume > 0) {
+                    // Check if the new surrogate is bigger
+                    if (!(Object.keys(place_one_book).length === 0) && place_one_book.geometry[0].area > test_book_rectangle_list[0].area) { // LWW TODO: Adjust for more complicated geometry
+                        console.log({Notification:"A surrogate replaced the same amount of support, but was bigger"});
+                        place_one_book = candidate;
+                    }
+                    else {
+                        epsilon_0_counter++;
+                    }
                 }
 
-                //console.log({best_delta:best_delta});
+                //console.log({best_delta_volume:best_delta_volume});
 
                 repetition_counter++;
             }
-            console.log({best_delta:best_delta});
+            console.log({best_delta_volume:best_delta_volume});
             console.log({epsilon_0_counter:epsilon_0_counter});
             //test_books_rectangle_list.push(place_one_book.geometry[0])
-            if (best_delta > 5) {
+            if (best_delta_volume > 500) {
                 books_placed.push(place_one_book);
-                try_book.available = false; // Mark book as used
+                place_one_book.book.available = false; // Mark book as used
 
-                
-                addPauseLayer(best_layer_number, settings);
+                console.log({placed_book_name:place_one_book.book.id});
+                // console.log({the_book:place_one_book.book});
+                // console.log({the_book2:books[try_book_index]});
             }
         }
 
+        console.log({books_placed:books_placed});
+
+
+        // Remove supports based on surrogates placed
         up = bottom_slice;
+        let top_slice = bottom_slice;
         // For all slices
         while (up) {
             // If supports exist
@@ -1402,65 +1605,365 @@
                 //for (surrogate in books_placed) {
                 for (let idx = 0; idx < books_placed.length; idx++) {
                     let surrogate = books_placed[idx];
+                    
+                    if (surrogate.insertion_data.insertion_case === "Insert_new_support_layer") {
+                        let up_height_range = get_height_range(up);
+                        if (up_height_range.bottom_height < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
+                            let surrogated_supports = [];
+                            POLY.subtract(up.supports, surrogate.geometry, surrogated_supports, null, up.z, min); // TODO: Collect book polygons and do it only once
+                            up.supports = surrogated_supports;
+                        }
+                    }
                     // If the book is at this height
-                    if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
+                    else if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
                         let surrogated_supports = [];
-                        POLY.subtract(up.supports, surrogate.geometry, surrogated_supports, null, slice.z, min); // TODO: Collect book polygons and do it only once
+                        POLY.subtract(up.supports, surrogate.geometry, surrogated_supports, null, up.z, min); // TODO: Collect book polygons and do it only once
                         up.supports = surrogated_supports;
                     }
                 }
+            } else {
+                up.supports = [];
+            }
 
-                // After surrogating all supports, draw their outlines
-                for (let idx = 0; idx < books_placed.length; idx++) {
-                    let surrogate = books_placed[idx];
-                    // If the book is at this height
-                    if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
-                        if (surrogate.outlines_drawn < 2) {
-                            // make surrogate bigger
-                            let surrogate_expanded = [];
-                            surrogate_expanded = POLY.expand(surrogate.geometry, 0.4, up.z, surrogate_expanded, 1);
-                            
-                            // subtract actual surrogate area to get only the outline
-                            let surrogate_outline_area_only = [];
-                            POLY.subtract(surrogate_expanded, surrogate.geometry, surrogate_outline_area_only, null, up.z, min);
+            // After surrogating all supports, draw their outlines
+            for (let draw_outline_idx = 0; draw_outline_idx < books_placed.length; draw_outline_idx++) {
+                let surrogate = books_placed[draw_outline_idx];
+                // If the book is at this height
+                if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
+                    if (surrogate.outlines_drawn < 5) {
+                        // make surrogate bigger
+                        // let surrogate_enlarged_more = [];
+                        // let surrogate_enlarged = [];
+                        // surrogate_enlarged_more = POLY.expand(surrogate.geometry, 0.4 + surrogate_enlargement, up.z, surrogate_enlarged_more, 1); // For a less tight fit
+                        // surrogate_enlarged = POLY.expand(surrogate.geometry, surrogate_enlargement, up.z, surrogate_enlarged, 1); // For a less tight fit
+                        let surrogate_enlarged = [];
+                        let surrogate_double_enlarged = [];
+                        surrogate_enlarged = POLY.expand(surrogate.geometry, 0.4, up.z, surrogate_enlarged, 1);
+                        surrogate_double_enlarged = POLY.expand(surrogate_enlarged, 0.4, up.z, surrogate_double_enlarged, 1); 
 
-                            // Add outline to supports (will still be a double outline for now)
-                            up.supports.push(surrogate_outline_area_only[0]);
-                            console.log({surrogate_outline_area_only:surrogate_outline_area_only});
+                        
+                        // subtract actual surrogate area to get only the outline
+                        let surrogate_outline_area_only = [];
+                        // POLY.subtract(surrogate_enlarged_more, surrogate_enlarged, surrogate_outline_area_only, null, up.z, min);
+                        POLY.subtract(surrogate_enlarged, surrogate.geometry, surrogate_outline_area_only, null, up.z, min);
 
-                            //console.log({up_support:up.supports});
-                            //up.supports.push(surrogate.geometry[0]);
-                            //console.log({geometry:surrogate.geometry});
-                            surrogate.outlines_drawn++;
+                        // surrogate_outline_area_only[0].points.forEach(function (point) {
+                        //     point.z = point.z + 3.667686;
+                        // });
+
+                        // console.log({next_layer:up.up});
+                        // Add outline to supports (will still be a double outline for now)
+                        if (false) {
+                        //if (!first_placed) { // Switch mode for first outline
+                            up.tops[0].shells.push(surrogate_outline_area_only[0]);
+                            first_placed = true;
+                        } else {
+                            //up.supports.push(surrogate_outline_area_only[0]);
+                            if (!(up.tops[0].fill_sparse)) {
+                                up.tops[0].fill_sparse = [];
+                            }
+                            up.tops[0].fill_sparse.push(surrogate_outline_area_only[0]);
+                            let supp_minus_outlines = [];
+
+                            // Prevent overlap of outlines and support // LWW TODO: Try adding to support and combine the two
+                            up.supports = POLY.subtract(up.supports, surrogate_double_enlarged, supp_minus_outlines, null, up.z, min);
                         }
-                        if (false) { //(surrogate.outlines_drawn >= 2 && surrogate.outlines_drawn <= 3) {
-                            let surrogate_outline = [];
-                            let surrogate_outline2 = [];
-                            surrogate_outline = POLY.expand(surrogate.geometry, 0.1, up.z, surrogate_outline, 1);
+                        
+                        // console.log({surrogate_outline_area_only:surrogate_outline_area_only});
 
-                            let surrogate_outline_area_only = [];
-                            POLY.subtract(surrogate_outline, surrogate.geometry, surrogate_outline_area_only, null, slice.z, min);
-                            //POLY.expand(surrogate_outline, -0.2, up.z, surrogate_outline2);
-                            //surrogate_outline[0].setOpen(true);
-                            //surrogate_outline[0].points = surrogate_outline[0].points.slice(0, 3);
-                            console.log({surrogate_outline_area_only:surrogate_outline_area_only});
-                            //surrogate_outline[0].area2 = 0;
-                            
-                            //console.log({surrogate_outline2:surrogate_outline2});
-                            up.supports.push(surrogate_outline_area_only[0]);
-                            surrogate.outlines_drawn++;
-                            let up_top_zero = up.tops[0];
-                            if (!up_top_zero.fill_sparse) up_top_zero.fill_sparse = [];
-                            //up_top_zero.fill_sparse.appendAll(surrogate_outline);
+                        //console.log({up_support:up.supports});
+                        //up.supports.push(surrogate.geometry[0]);
+                        //console.log({geometry:surrogate.geometry});
+                        surrogate.outlines_drawn++;
+                    }
 
+                    // Trying to add outlines directly
+                    if (false) { //(surrogate.outlines_drawn >= 2 && surrogate.outlines_drawn <= 3) {
+                        let surrogate_outline = [];
+                        let surrogate_outline2 = [];
+                        surrogate_outline = POLY.expand(surrogate.geometry, 0.1, up.z, surrogate_outline, 1);
+
+                        let surrogate_outline_area_only = [];
+                        POLY.subtract(surrogate_outline, surrogate.geometry, surrogate_outline_area_only, null, slice.z, min);
+                        //POLY.expand(surrogate_outline, -0.2, up.z, surrogate_outline2);
+                        //surrogate_outline[0].setOpen(true);
+                        //surrogate_outline[0].points = surrogate_outline[0].points.slice(0, 3);
+                        console.log({surrogate_outline_area_only:surrogate_outline_area_only});
+                        //surrogate_outline[0].area2 = 0;
+                        
+                        //console.log({surrogate_outline2:surrogate_outline2});
+                        up.supports.push(surrogate_outline_area_only[0]);
+                        surrogate.outlines_drawn++;
+                        let up_top_zero = up.tops[0];
+                        if (!up_top_zero.fill_sparse) up_top_zero.fill_sparse = [];
+                        //up_top_zero.fill_sparse.appendAll(surrogate_outline);
+
+                    }
+                }
+            }
+            top_slice = up;
+            up = up.up; 
+        } // top_slice should now be at the top
+
+        // LWW TODO: Remove this warning check if insertion layers are too close
+        let iterating_down = top_slice;
+        books_placed.sort((a, b) => (a.insertion_data.new_layer_index > b.insertion_data.new_layer_index) ? 1 : -1);
+        let last_surrogate;
+        books_placed.forEach(function(surrogate) {
+            if (last_surrogate && Math.abs(surrogate.insertion_data.new_layer_index - last_surrogate.insertion_data.new_layer_index) === 1) {
+                console.log({WARNING:"Surrogates are on consecutive layers!"});
+            }
+            last_surrogate = surrogate;
+        });
+
+
+        // Adjust layer heights and slide in new layers at surrogate top ends
+        while (iterating_down) {
+            let surrogates_at_this_index = [];
+            let all_other_surrogates = [];
+            books_placed.forEach(function(surrogate) {
+                if (surrogate.insertion_data.new_layer_index === iterating_down.index) {
+                    surrogates_at_this_index.push(surrogate);
+                }
+                else {
+                    all_other_surrogates.push(surrogate);
+                }
+            });
+            
+            if (surrogates_at_this_index.length >= 1) {
+                // Add pause layer at index of already printed layer
+                addPauseLayer(surrogates_at_this_index[0].insertion_data.printed_layer_index, settings);
+
+                console.log({surrogates_at_this_index:surrogates_at_this_index});
+                let new_layer_height_range = get_height_range(iterating_down);
+                let printed_layer_height_range = get_height_range(iterating_down.down);
+                let new_layer_new_height_values;
+                let printed_layer_new_height_values;
+                let change_slices = true;
+
+                // Special case: Multiple surrogates on one slice
+                if (surrogates_at_this_index.length > 1) {
+                    console.log({Status:"Multiple surrogates."});
+                    
+                    let only_simple_case = true;
+                    let lowest_height = Number.POSITIVE_INFINITY;
+                    let highest_height = -1;
+                    // Check which cases are present
+                    surrogates_at_this_index.forEach(function(surrogate) {
+                        if (highest_height < surrogate.insertion_data.max_height) highest_height = surrogate.insertion_data.max_height;
+                        if (lowest_height > surrogate.insertion_data.min_height) lowest_height = surrogate.insertion_data.min_height;
+                        if (surrogate.insertion_data.insertion_case != "extend_printed_layer") only_simple_case = false;         
+                    });
+
+                    if (only_simple_case) {
+                        // set bot of new layer and top of printed layer to found max height == Extend both up
+                        new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, highest_height);
+                        printed_layer_new_height_values = get_slice_height_values(highest_height, printed_layer_height_range.bottom_height);
+                        
+                    }
+                    else {
+                        // set bot of new layer and top of printed layer to found min height (extrude down a lot) // LWW TODO: make sure z is high enough for all surrogates, droop as much as necessary
+                        new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, lowest_height);
+                        printed_layer_new_height_values = get_slice_height_values(lowest_height, printed_layer_height_range.bottom_height);
+                    }
+                    
+                }
+                // Simple cases: One surrogate on the slice
+                else if (surrogates_at_this_index.length === 1) {
+                    if (surrogates_at_this_index[0].insertion_data.insertion_case === "Insert_new_support_layer") {
+                        change_slices = false;
+                        let original_supports = surrogates_at_this_index[0].insertion_data.original_supports;
+                        let only_support_above_this_surrogate = [];
+                        // console.log({slideInSlice:surrogates_at_this_index[0]});
+                        // console.log({iterating_down:iterating_down});
+                        // console.log({iterating_down_DOWN:iterating_down.down});
+                        
+                        // Get only the diff of supports (after surrogating) from the printed slice
+                        if (false) {
+                            original_supports.forEach(function(original_supp) {
+                                console.log({original_supp:original_supp});
+                                let support_diff = original_supp;
+                                if (iterating_down.down.supports) {
+                                    iterating_down.down.supports.forEach(function(supp) {
+                                        let full_arr = support_diff;
+                                        let subtract_arr = supp;
+                                        let out_arr = [];
+                                        support_diff = POLY.subtract(full_arr, subtract_arr, out_arr, null, new_layer_height_range.bottom_height, min);
+                                    });
+                                }
+                                // support_diff.forEach(function(diff) {
+                                //     only_support_above_this_surrogate.push(diff);
+                                // });
+                                only_support_above_this_surrogate.push(support_diff);
+                            });
                         }
+
+
+                        // Support on the new slide-in slice are: 
+                        //      - The original supports MINUS
+                        //          - remaining supports
+                        //          - other surrogate geometriues
+                        // First collect all geometries that should be removed from original supports 
+                        let collect_all_polygons_removed_from_support = [];
+
+                        // There will be overlap unless we expand the remaining supports
+                        let support_enlarged = []
+                        support_enlarged = POLY.expand(iterating_down.down.supports, 0.4, iterating_down.down.z, support_enlarged, 1);
+                        support_enlarged.forEach(function(supp) {
+                            collect_all_polygons_removed_from_support.push(supp);
+                        });
+
+
+                        all_other_surrogates.forEach(function(surrogate) {
+                            collect_all_polygons_removed_from_support = collect_all_polygons_removed_from_support.concat(getSurrogateGeometryAtIndexHeight(surrogate, iterating_down.down.z));
+                            // console.log({other_surrogate_geometries:getSurrogateGeometryAtIndexHeight(surrogate, iterating_down.down.z)});
+                        });
+
+
+                        console.log({collected_polygons:collect_all_polygons_removed_from_support});
+                        // Get only the support on top of the current surrogate by subtracting original supports minus remaining supports/surrogates
+                        POLY.subtract(original_supports, collect_all_polygons_removed_from_support, only_support_above_this_surrogate, null, new_layer_height_range.bottom_height, min);
+
+                        // console.log({original_supports:original_supports});
+                        // console.log({down_supports:iterating_down.down.supports});
+                        // console.log({only_support_above_this_surrogate:only_support_above_this_surrogate});
+                        
+                        // Testing
+                        // iterating_down.down.supports.forEach(function(supp) {
+                        //     only_support_above_this_surrogate.push(supp);
+                        // });
+
+                        let slide_in_slice_height_values = get_slice_height_values(new_layer_height_range.bottom_height + surrogate_settings.minimum_clearance_height, surrogates_at_this_index[0].end_height, false);
+                        let slide_in_slice = newSlice(slide_in_slice_height_values.z, view);
+                        slide_in_slice.height = slide_in_slice_height_values.height;
+                        slide_in_slice.widget = iterating_down.widget; 
+                        slide_in_slice.extruder = iterating_down.extruder; 
+                        slide_in_slice.isSparseFill = iterating_down.isSparseFill;
+                        slide_in_slice.isSolidLayer = iterating_down.isSolidLayer;
+                        slide_in_slice.offsets = iterating_down.offsets;
+                        //slide_in_slice.finger = iterating_down.finger;
+                        slide_in_slice.supports = only_support_above_this_surrogate;
+
+                        slide_in_slice.down = iterating_down.down;
+                        slide_in_slice.up = iterating_down;
+                        iterating_down.down.up = slide_in_slice;
+                        iterating_down.down = slide_in_slice;
+                        slide_in_slice.index = iterating_down.index;
+
+                        // Adjust all slice indexes above
+                        iterating_down.index = iterating_down.index + 1;
+                        let correcting_chain = iterating_down;
+                        while (correcting_chain.up) {
+                            correcting_chain = correcting_chain.up;
+                            correcting_chain.index = correcting_chain.index + 1;
+                        }
+
+                        console.log({slide_in_slice:slide_in_slice});
+                        console.log({iterating_down:iterating_down.index});
+
+                        // Now skip the newly added slice
+                        iterating_down = iterating_down.down;
+                    } 
+                    else if (surrogates_at_this_index[0].insertion_data.insertion_case === "extend_printed_layer") {
+                        let highest_height = surrogates_at_this_index[0].insertion_data.max_height;
+                        new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, highest_height);
+                        printed_layer_new_height_values = get_slice_height_values(highest_height, printed_layer_height_range.bottom_height);
+                        console.log({iterating_down:iterating_down.index});
+                    }
+                    else if (surrogates_at_this_index[0].insertion_data.insertion_case === "extend_new_layer") {
+                        let lowest_height = surrogates_at_this_index[0].insertion_data.min_height;
+                        new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, lowest_height);
+                        printed_layer_new_height_values = get_slice_height_values(lowest_height, printed_layer_height_range.bottom_height);
+                        console.log({iterating_down:iterating_down.index});
+                    }
+                }
+                if (change_slices) {
+                    iterating_down.z = new_layer_new_height_values.z;
+                    iterating_down.height = new_layer_new_height_values.height;
+                    iterating_down.down.z = printed_layer_new_height_values.z;
+                    iterating_down.down.height = printed_layer_new_height_values.height;
+                }
+            }
+
+            iterating_down = iterating_down.down;
+            
+        }
+
+
+        // Old way of determining surrogates on a layer
+        if (false) {
+            up = bottom_slice;
+            let heighest_surrogate_top = -1; // -1 means no surrogate ends in the previous layer
+            // adjust following layer (only support?) heights based on surrogate top heights
+            while (up) {
+                // Set z of next layer to a height with good chance of sticking to surrogate, and adjust it's height accordingly // LWW TODO: Might want to change this to increase extrusion here
+                if (heighest_surrogate_top > -1) {
+                    let target_layer_top = up.z + up.height;
+                    // up.z = heighest_surrogate_top + layer_height_fudge;
+                    // up.height = (target_layer_top - up.z) + print_on_surrogate_extra_height_for_extrusion;
+
+                    let slide_in_slice = newSlice(up.z, view);
+                    //let slide_in_slice = up.z.clone();
+                    //slide_in_slice.tops = up.tops;
+                    slide_in_slice.widget = up.widget; 
+                    slide_in_slice.extruder = up.extruder; 
+                    slide_in_slice.isSparseFill = up.isSparseFill;
+                    slide_in_slice.isSolidLayer = up.isSolidLayer;
+                    slide_in_slice.offsets = up.offsets;
+
+                    
+                    slide_in_slice.down = up.down;
+                    slide_in_slice.up = up;
+                    up.down.up = slide_in_slice;
+                    up.down = slide_in_slice;
+                    slide_in_slice.index = up.index;
+                    slide_in_slice.z = heighest_surrogate_top + layer_height_fudge;
+                    slide_in_slice.height = (target_layer_top - slide_in_slice.z) + print_on_surrogate_extra_height_for_extrusion;
+                    
+                    // copy_supports(slide_in_slice, up);
+                    
+                    if (!slide_in_slice.supports) slide_in_slice.supports = [];
+                    up.supports.forEach(function(supp) {
+                        slide_in_slice.supports.push(supp);
+                    });
+                    
+                    console.log({slide_in_slice:slide_in_slice});
+                    console.log({slide_in_slide_supports:slide_in_slice.supports});
+                    slide_in_slice.is_surrogate_end_slice = true;
+                    
+
+                    up.index = up.index + 1;
+                    let correcting_chain = up;
+                    while (correcting_chain.up) {
+                        correcting_chain = correcting_chain.up;
+                        correcting_chain.index = correcting_chain.index + 1;
                     }
                 }
 
+                heighest_surrogate_top = -1;
+
+                // Find heighest surrogate that ends in the range of this layers thickness
+                for (let heigh_surrogate_idx = 0; heigh_surrogate_idx < books_placed.length; heigh_surrogate_idx++) {
+                    let surrogate = books_placed[heigh_surrogate_idx];
+                    let end_Height = surrogate.book.height + surrogate.starting_height;
+                    if (end_Height > up.z && end_Height < up.z + up.height && end_Height > heighest_surrogate_top) {
+                        heighest_surrogate_top = end_Height;
+                    }
+                }
+                up = up.up;
+                if (up && up.is_surrogate_end_slice) up = up.up; // Skip the newly added layer
             }
+        }
+
+        console.log({done:"done"});
+        let all_slices = [];
+        up = bottom_slice;
+        // For all slices
+        while (up) {
+            all_slices.push(up);
             up = up.up;
         }
-        console.log({done:"done"});
+        return all_slices;
     }
 
     /**
