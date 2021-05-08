@@ -118,7 +118,7 @@ let gs_kiri_fdm = exports;
             slices = slices.filter(slice => slice.tops.length);
             if (!slices) return;
 
-            // for each slice, performe a function and call doupdate()
+            // for each slice, perform a function and call doupdate()
             function forSlices(from, to, fn, msg) {
                 slices.forEach(function(slice) {
                     fn(slice);

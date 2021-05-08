@@ -754,27 +754,12 @@ self.kiri.copyright = exports.COPYRIGHT;
         SCRAPS[SCRAPS.length-3] = extractedData;
         for (let widgetIndex = 0; widgetIndex < KIRI.widgets.length; widgetIndex++) {
                             
-            // console.log(KIRI.widgets);
-            // console.log(KIRI.widgets[widgetIndex]);
-            // console.log(KIRI.widgets[widgetIndex].id);
-            // console.log(KIRI.widgets[widgetIndex].id);
-            // console.log(KIRI.widgets[widgetIndex].id);
-            // console.log(KIRI.widgets[widgetIndex].id);
-            // console.log(KIRI.widgets[widgetIndex].id);
-            // // console.log(KIRI.widgets[widgetIndex].ScrapDataArray);
-            // // KIRI.widgets[widgetIndex].id = "HALLO";
-            // console.log(KIRI.widgets[widgetIndex].id);
-            // console.log(KIRI.widgets[widgetIndex].id);
-            // KIRI.widgets[widgetIndex].isScrap = clone(adjustedScraps);
             KIRI.widgets[widgetIndex].isScrap = true;
             KIRI.widgets[widgetIndex].scrapDataArray = SCRAPS;
-            // console.log(KIRI.widgets[widgetIndex].id);
+
             // console.log(KIRI.widgets[widgetIndex].id);
             // console.log(KIRI.widgets[widgetIndex].ScrapDataArray);
             // console.log(KIRI.widgets[widgetIndex].isScrap);
-            // console.log("DOne");
-
-            // KIRI.widgets[widgetIndex].ScrapDataArray = clone(SCRAPS);
         }
 
         

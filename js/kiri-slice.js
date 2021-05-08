@@ -351,7 +351,6 @@ let gs_kiri_slice = exports;
             cfil = clib.PolyFillType,
             scrapSlice = scope.scrapSlice;
         var currentZ = scope.z;
-        // console.log(scope);
         // clip perimeters separately by top
         tops.forEach(function(top) {
             let scrapOutlines2 = [],

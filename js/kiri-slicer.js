@@ -35,7 +35,7 @@ let gs_kiri_slicer = exports;
      */
     function sliceWidget(widget, options, ondone, onupdate, ondoneScrap, onupdateScrap, isScrap) {
         // console.log("kiri-slicer_sliceWidget");
-        console.log("sliceWidget", widget);
+        // console.log("sliceWidget", widget);
         slice(widget.getPoints(), widget.getBoundingBox(), options, ondone, onupdate, ondoneScrap, onupdateScrap, isScrap, widget.getScrapData());
     }
 
@@ -47,7 +47,7 @@ let gs_kiri_slicer = exports;
      */
     function prepareScrap(ScrapDataArray, widgetPointer) {
         // console.log("kiri-slicer_sliceWidget");
-        console.log("Slicer_prepareScrap", KIRI.scraps);
+        // console.log("Slicer_prepareScrap", KIRI.scraps);
         for (let scrapIndex = 0; scrapIndex < KIRI.scraps.length; scrapIndex = scrapIndex + 4) {
             
             let translation = KIRI.scraps[scrapIndex + 3];
@@ -79,7 +79,7 @@ let gs_kiri_slicer = exports;
             // console.log("meshPointsArray", meshPointsArray);
             // console.log("scrapMesh.geometry.attributes.position.array", scrapMesh.geometry.attributes.position.array);
             var scrapPoints = KIRI.Widget.verticesToPoints(meshPointsArray, true); // decimating = true I guess
-            console.log("scrapPoints", scrapPoints);
+            // console.log("scrapPoints", scrapPoints);
             var scrapBB = new THREE.Box3();
             scrapBB.setFromPoints(scrapPoints);
             // KIRI.scraps[scrapIndex + 1] = {points: scrapPoints, bounds: scrapBB};
@@ -648,16 +648,22 @@ let gs_kiri_slicer = exports;
 
         // console.log(KIRI);
         // console.log("slicer-ScrapDataArray", ScrapDataArray);
-        console.log("slicer_slicing");
-        console.log("scrapData", scrapData);
-        console.log("isScrap", isScrap);
+
+        let debugging = false;
+
+        if (debugging == true) {
+            console.log("slicer_slicing");
+            console.log("scrapData", scrapData);
+            console.log("isScrap", isScrap);
+        }
         let scrapSlices = [];
         if (scrapData[1]) {
             scrapSlices = sliceScrap(scrapData[1].points, scrapData[1].bounds, options, ondoneScrap, onupdateScrap, isScrap);
         }
         
-
-        console.log("Scrapslices:", scrapSlices);
+        if (debugging == true) {
+            console.log("Scrapslices:", scrapSlices);
+        }
         
 
         let topoMode = options.topo,
@@ -949,7 +955,9 @@ let gs_kiri_slicer = exports;
                 }
             }
         }
-        console.log("scrapStart found:", scrapStartFound, scrapStartIndex);
+        if (debugging == true) {
+            console.log("scrapStart found:", scrapStartFound, scrapStartIndex);
+        }
 
         // create a Slice for each z offset in the zIndexes array
         for (let i = 0; i < zIndexes.length; i++) {
@@ -981,7 +989,9 @@ let gs_kiri_slicer = exports;
             }
             onupdate(i / zIndexes.length);
         }
-        console.log("model slices", slices);
+        if (debugging == true) {
+            console.log("model slices", slices);
+        }
 
         // for cam, bottom as mandatory (hasFlats)
         if (isCam && slices.length > 0) {
@@ -1081,7 +1091,7 @@ let gs_kiri_slicer = exports;
          * @param {number} [height] optional real height (fdm)
          */
         function sliceZ(z, height, onflat, online, isScrap) {
-            if (isScrap)
+            if (isScrap && debugging == true)
             {
                 console.log("slicingScrap");
             }
