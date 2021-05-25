@@ -159,6 +159,8 @@ KIRI.worker = {
             last = time(),
             now;
 
+        console.log("Testing!");
+
         try {
             widget.slice(settings, function(error) {
                 if (error) {
@@ -192,6 +194,9 @@ KIRI.worker = {
             //console.log(error_stack);
             console.log({error_occured:"An error occured apparently."});
         }
+       
+        //loadedData.then()
+
     },
 
     prepare: function(data, send) {
