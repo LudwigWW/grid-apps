@@ -12,6 +12,8 @@
         CONF = BASE.config,
         FDM = KIRI.driver.FDM,
         SLICER = KIRI.slicer,
+        PARALLELENV = KIRI.parallelenv,
+        PSO = KIRI.pso,
         fillArea = POLY.fillArea,
         newPoint = BASE.newPoint,
         newSlice = KIRI.newSlice,
@@ -1068,7 +1070,10 @@
             }
             iterate_layers_case_check = iterate_layers_case_check.up;
         }
-        if (!case_determined) console.log({WARNING:"WARNING: No case found for surrogate height handling."});
+        if (!case_determined) {
+            console.log({WARNING:"WARNING: No case found for surrogate height handling."});
+            // console.log({surrogate:surrogate});
+        }
         
     }
 
@@ -1439,7 +1444,7 @@
                     try_rotation = rotations[Math.floor(Math.random() * rotations.length)];
                     try_book_index = Math.floor(Math.random() * books.length)
                     try_book = books[try_book_index];
-                    let test_book_rectangle_list = [generateRectanglePolygon(try_x, try_y, up.z, try_book.length, try_book.width, try_rotation, surrogate_settings.surrogate_padding)];
+                    let try_book_polygons_list = [generateRectanglePolygon(try_x, try_y, up.z, try_book.length, try_book.width, try_rotation, surrogate_settings.surrogate_padding)];
                     let supports_after_surrogates = [];
                     let collision = false;
                     let new_volume = 0, old_volume = 0;
@@ -1460,7 +1465,7 @@
                     
 
                     // Out of build-area check
-                    for (let book_poly of test_book_rectangle_list) {
+                    for (let book_poly of try_book_polygons_list) {
                         // translate widget coordinate system to build plate coordinate system and compare with build plate size (center is at 0|0, bottom left is at -Width/2<|-Depth/2)
                         if (book_poly.bounds.maxx + shift_x > bedWidthArea || book_poly.bounds.minx + shift_x < -bedWidthArea || book_poly.bounds.maxy + shift_y > bedDepthArea || book_poly.bounds.miny + shift_y < -bedDepthArea || try_z + try_book.height > settings.device.bedDepth) {
                             // console.log({text:"Out of build area"});
@@ -1479,11 +1484,11 @@
                     if (stack_on_book_index >= 0) {
                         let unsupported_polygons = [];
                         let unsupp_area = 0, full_area = 0;
-                        POLY.subtract(test_book_rectangle_list, books_placed[stack_on_book_index].geometry, unsupported_polygons, null, up.z, min);
+                        POLY.subtract(try_book_polygons_list, books_placed[stack_on_book_index].geometry, unsupported_polygons, null, up.z, min);
                         unsupported_polygons.forEach(function(unsupp) {
                             unsupp_area += Math.abs(unsupp.area());
                         });
-                        test_book_rectangle_list.forEach(function(full) {
+                        try_book_polygons_list.forEach(function(full) {
                             full_area += Math.abs(full.area());
                         });
 
@@ -1520,7 +1525,7 @@
                         }
                         
                         supports_after_surrogates = [];
-                        POLY.subtract(iterate_layers_over_surrogate_height.supports, test_book_rectangle_list, supports_after_surrogates, null, iterate_layers_over_surrogate_height.z, min);
+                        POLY.subtract(iterate_layers_over_surrogate_height.supports, try_book_polygons_list, supports_after_surrogates, null, iterate_layers_over_surrogate_height.z, min);
 
                         // console.log({supports_after_surrogates:supports_after_surrogates});
                         // console.log({iterate_layers_over_surrogate_height_supports:iterate_layers_over_surrogate_height.supports});
@@ -1560,7 +1565,7 @@
                             // }
 
                             let collision_detection = [];
-                            POLY.subtract(iterate_layers_collision_check.topPolys(), test_book_rectangle_list, collision_detection, null, iterate_layers_collision_check.z, min);
+                            POLY.subtract(iterate_layers_collision_check.topPolys(), try_book_polygons_list, collision_detection, null, iterate_layers_collision_check.z, min);
                             
                             let post_collision_area = 0, pre_collision_area = 0;
                             iterate_layers_collision_check.topPolys().forEach(function(top_poly) {
@@ -1587,11 +1592,11 @@
 
                                         collision_detection = [];
                                         
-                                        POLY.subtract(test_book_rectangle_list, previous_surrogate.geometry, collision_detection, null, iterate_layers_collision_check.z, min); // TODO: Check if Z matters
+                                        POLY.subtract(try_book_polygons_list, previous_surrogate.geometry, collision_detection, null, iterate_layers_collision_check.z, min); // TODO: Check if Z matters
                                         
                                         post_collision_area = 0;
                                         pre_collision_area = 0;
-                                        test_book_rectangle_list.forEach(function(top_poly) {
+                                        try_book_polygons_list.forEach(function(top_poly) {
                                             pre_collision_area += Math.abs(top_poly.area());
                                         });
                                         collision_detection.forEach(function(top_poly) {
@@ -1629,7 +1634,7 @@
                     }
                     let end_height = try_z + try_book.height;
                     let candidate = {
-                        geometry:test_book_rectangle_list, 
+                        geometry:try_book_polygons_list, 
                         book:try_book, starting_height:try_z, 
                         end_height:end_height, 
                         down_surrogate:lower_book, 
@@ -1660,7 +1665,7 @@
                     // If it is just as good --> choose the bigger one
                     else if (good === true && delta_volume === best_delta_volume && delta_volume > 0) {
                         // Check if the new surrogate is bigger
-                        if (!(Object.keys(place_one_book).length === 0) && place_one_book.geometry[0].area > test_book_rectangle_list[0].area) { // LWW TODO: Adjust for more complicated geometry
+                        if (!(Object.keys(place_one_book).length === 0) && place_one_book.geometry[0].area > try_book_polygons_list[0].area) { // LWW TODO: Adjust for more complicated geometry
                             console.log({Notification:"A surrogate replaced the same amount of support, but was bigger"});
                             place_one_book = candidate;
                         }
@@ -2143,24 +2148,30 @@
                 //     bottom_slice.tops[0].fill_sparse.push(padded_debug[debug_index]);
                 // }
             }
-            else console.log({note:"There were 0 supports left"});
+
+            // TODO: Fix this output to avoid spamming while out-of-bounds
+            // else console.log({note:"There were 0 supports left"});
+
+            let new_area = 0;
+            let old_area = 0;
 
             supports_after_surrogates.forEach(function(supp) {
                 new_volume += Math.abs((supp.area() * current_slice.height));
-                
+                new_area += Math.abs(supp.area());
             });
+            
 
 
             current_slice.supports.forEach(function(supp) {
                 old_volume += Math.abs((supp.area() * current_slice.height));
-
+                old_area += Math.abs(supp.area());
 
                 // if (!current_slice.tops[0].fill_sparse) current_slice.tops[0].fill_sparse = [];
                 //current_slice.tops[0].fill_sparse.push(supp);
                 
             });
-
-            return [old_volume, new_volume];
+            let delta_area = old_area - new_area;
+            return [old_volume, new_volume, delta_area];
         }
 
         function generatePrismPolygon(start_x, start_y, start_z, geometry_points, rot, padding, debug_slice) {
@@ -2234,6 +2245,361 @@
             console.log({pause_layers:settings.process.gcodePauseLayers});
         }
 
+        function checkVolumeAndCollisions(surrogate_library, surrogate_settings, bottom_slice, try_book_index, try_book_polygons_list, try_z, books_placed) {
+            let collision = false;
+            let overextended = false;
+            let iterate_layers_VandC = bottom_slice;
+            let try_book = surrogate_library[try_book_index];
+            let new_volume = 0;
+            let old_volume = 0;
+
+            let last_collision_area = 0;
+            let max_surrogated_area = 0;
+            // TODO: Make try_book_polygons_list here, or generate only once and translate+rotate instead
+
+            // Check for collision for the whole surrogate height
+            while (iterate_layers_VandC && overextended === false) { // && collision === false ) { // Stop after first collision found, or end of widget reached
+                
+                // Increase height until surrogate starting height is reached 
+                // Approximation: If more than half of the slice height is surrogated, we count it fully (for volume) #TODO: for collisions we might want to check for ANY overlap
+                if (iterate_layers_VandC.z < try_z) { // LWW TODO: Check at what height we actually want to start checking for collisions
+                    iterate_layers_VandC = iterate_layers_VandC.up;
+                    // console.log({going_up: "Going up because book is not on buildplate my DUDE!!!!!!!"});
+                    continue;
+                }
+
+                // DON'T skip the layers, since we are looking for model polygons and previous surrogate supports
+                // Skip layers without support
+                // if (!iterate_layers_VandC.supports || iterate_layers_VandC.supports.length === 0) {
+                //     iterate_layers_VandC = iterate_layers_VandC.up;
+                //     console.log({going_up: "No support to check for collision found on this slice"});
+                //     continue;
+                // }
+
+
+                let calculating_volume = true;
+                let check_collisions = true;
+                let slice_height_range = get_height_range(iterate_layers_VandC);
+                
+                
+                // Skip volume count for layers that have no supports
+                if (!iterate_layers_VandC.supports || iterate_layers_VandC.supports.length === 0) {
+                    calculating_volume = false;
+                }
+                // Stop counting volume once surrogate height has passed 
+                else if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) >= (try_book.maxHeight + try_z)){
+                    calculating_volume = false;
+                }
+
+                // stop checking collisions when surrogate top is higher than slice bottom + min squish height 
+                if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) >= (try_book.maxHeight + try_z)) { 
+                    check_collisions = false;
+                }
+
+                // TODO: Remove if unnecessary
+                if (collision) check_collisions = false;
+                
+                if (calculating_volume) {
+                    const volumes = getSurrogateReplacedVolumes(old_volume, new_volume, iterate_layers_VandC, try_book_polygons_list);
+                    old_volume = volumes[0];
+                    new_volume = volumes[1];
+                    if (max_surrogated_area < volumes[2]) max_surrogated_area = volumes[2];
+                }
+
+                if (check_collisions) {
+                    let collision_detection = [];
+                    POLY.subtract(iterate_layers_VandC.topPolys(), try_book_polygons_list, collision_detection, null, iterate_layers_VandC.z, min);
+                    // console.log({try_book_polygons_list:try_book_polygons_list});
+                    
+                    let post_collision_area = 0, pre_collision_area = 0;
+                    iterate_layers_VandC.topPolys().forEach(function(top_poly) {
+                        pre_collision_area += Math.abs(top_poly.area());
+                    });
+                    collision_detection.forEach(function(top_poly) {
+                        post_collision_area += Math.abs(top_poly.area());
+                    });
+                    
+                    if ((pre_collision_area - post_collision_area) > 0.00001) { // rounded the same // TODO: Currently testing whether we need Math abs with switched subtraction order
+                        if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) < (try_book.minHeight + try_z)) {
+                            collision = true;
+                            last_collision_area = pre_collision_area - post_collision_area;
+                            continue;
+                        }
+                        else {
+                            try_book.height = iterate_layers_VandC.down.z; // TODO: Test whether this is the best previous height
+                            overextended = true;
+                            continue;
+                        }
+                        //console.log({collision_true: post_collision_area - pre_collision_area});
+                    }
+
+                    // Check collision with already placed surrogates as well
+                    
+                    if (books_placed.length >= 1) {
+                        
+                        for (let books_placed_idx = 0; books_placed_idx < books_placed.length; books_placed_idx++) {
+                            let previous_surrogate = books_placed[books_placed_idx];
+
+                            if (iterate_layers_VandC.z <= (previous_surrogate.book.height + previous_surrogate.starting_height) && iterate_layers_VandC.z >= previous_surrogate.starting_height) {
+
+                                collision_detection = [];
+                                
+                                POLY.subtract(try_book_polygons_list, previous_surrogate.geometry, collision_detection, null, iterate_layers_VandC.z, min); // TODO: Check if Z matters
+                                
+                                post_collision_area = 0;
+                                pre_collision_area = 0;
+                                try_book_polygons_list.forEach(function(top_poly) {
+                                    pre_collision_area += Math.abs(top_poly.area());
+                                });
+                                collision_detection.forEach(function(top_poly) {
+                                    post_collision_area += Math.abs(top_poly.area());
+                                });
+                                
+                                if ((pre_collision_area - post_collision_area) > 0.00001) {
+                                    if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) < (try_book.minHeight + try_z)) {
+                                        collision = true;
+                                        last_collision_area = pre_collision_area - post_collision_area;
+                                        continue;
+                                    }
+                                    else {
+                                        try_book.height = iterate_layers_VandC.down.z; // TODO: Test whether this is the best previous height
+                                        overextended = true;
+                                        continue;
+                                    }
+                                    //console.log({collision_true: post_collision_area - pre_collision_area});
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Out of range of surrogate, nothing left to do
+                if (check_collisions === false && calculating_volume === false) {
+                    // repetition_counter++;
+                    break;
+                }
+
+                // Step up
+                iterate_layers_VandC = iterate_layers_VandC.up;
+                // insertion_layer_number_guess = iterate_layers_VandC.index;
+            }
+            if (collision) {
+                // good = false;
+                // repetition_counter++;
+
+                // let negative_volume = last_collision_area * -1;
+                // return [collision, negative_volume, negative_volume];
+            }
+
+            // let overlap_factor = last_collision_area / max_surrogated_area;
+            // if (overlap_factor > 1) overlap_factor = 1.0;
+        
+            return [collision, old_volume, new_volume, last_collision_area, max_surrogated_area];//overlap_factor]
+        }
+
+        function placeAndEval(var_and_settings) {
+            let all_surrogates = [];
+            for (old_surrogate of var_and_settings[1].existing_surrogates) {
+                all_surrogates.push(old_surrogate);
+            };
+            let new_surrogates = [];
+            let results_array = [];
+
+            // let pso_collision_and_volumes = checkVolumeAndCollisions(books, optimizer.surrogate_settings, bottom_slice, try_book_index, try_book_polygons_list, try_z, books_placed);
+
+            for (let iteration_number = 0; iteration_number < var_and_settings[1].searchspace_max_number_of_surrogates; iteration_number++) {
+
+                // if (var_list[0] >= iteration_number) {
+                if(true) {
+
+                    // Select test surrogate
+                    let library_index = Math.floor(var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 5]);
+                    if (library_index >= var_and_settings[2].length) {
+                        library_index = var_and_settings[2].length-1;
+                    }
+                    else if (library_index < 0) {
+                        library_index = 0;
+                    }
+                    let pso_surrogate = var_and_settings[2][library_index];
+
+                    // Select test tower position/on baseplate
+                    let pso_z = 0;
+                    let tower_library_index = 0;
+                    if (var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 3] >= 1) {
+                        tower_library_index = 0.99999;
+                    }
+                    else if (var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 3] < 0) {
+                        tower_library_index = 0;
+                    }
+                    else tower_library_index = var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 3];
+                    tower_library_index = Math.floor(tower_library_index * (all_surrogates.length+1)); // #previous surrogates + 1 for on-baseplate
+                    tower_library_index = tower_library_index - 1; 
+                    if (tower_library_index > 0) pso_z = all_surrogates[tower_library_index].starting_height + all_surrogates[tower_library_index].book.height;
+                    
+
+                    
+                    // generate polygons // TODO: Is it faster to make one poly for the surrogate and then rotate+translate /modify the points directly?
+                    let pso_polygons_list = []
+                    if (pso_surrogate.type == "simpleRectangle") {
+                        pso_polygons_list = [generateRectanglePolygon(var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 1], var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 2], var_and_settings[1].start_slice.z, pso_surrogate.length, pso_surrogate.width, var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 4], surrogate_settings.surrogate_padding, var_and_settings[1].start_slice)];
+                    }
+                    else if (pso_surrogate.type == "prism") {
+                        pso_polygons_list = [generatePrismPolygon(var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 1], var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 2], var_and_settings[1].start_slice.z, pso_surrogate.prism_geometry, var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 4], surrogate_settings.surrogate_padding, var_and_settings[1].start_slice)];
+                    }
+
+
+                    // Out of build-area check
+                    for (let pso_poly of pso_polygons_list) {
+                        // translate widget coordinate system to build plate coordinate system and compare with build plate size (center is at 0|0, bottom left is at -Width/2<|-Depth/2)
+                        if (pso_poly.bounds.maxx + shift_x > bedWidthArea || pso_poly.bounds.minx + shift_x < -bedWidthArea || pso_poly.bounds.maxy + shift_y > bedDepthArea || pso_poly.bounds.miny + shift_y < -bedDepthArea || pso_z + pso_surrogate.height > settings.device.bedDepth) {
+                            continue; // TODO: save for return later the negative size of overlap for this test part?
+                        }
+                    }
+
+                    // Stability check
+                    if (tower_library_index >= 0) {
+                        let unsupported_polygons = [];
+                        let unsupp_area = 0, full_area = 0;
+                        POLY.subtract(pso_polygons_list, all_surrogates[tower_library_index].geometry, unsupported_polygons, null, var_and_settings[1].start_slice.z, min);
+                        unsupported_polygons.forEach(function(unsupp) {
+                            unsupp_area += Math.abs(unsupp.area());
+                        });
+                        pso_polygons_list.forEach(function(full) {
+                            full_area += Math.abs(full.area());
+                        });
+
+                        // If less than half the area of the new book is supported by the book below, surrogate is unstable
+                        //if ((unsupp_area * 2) > full_area) {
+                        // For now, use 100% support instead
+                        if (unsupp_area > 0) {
+                            
+                            continue;
+                        }
+                    }
+
+                    let pso_collision_and_volumes = checkVolumeAndCollisions(var_and_settings[2], var_and_settings[1], var_and_settings[1].start_slice, library_index, pso_polygons_list, pso_z, all_surrogates);
+                    const delta_volume = pso_collision_and_volumes[1] - pso_collision_and_volumes[2];
+                    if (delta_volume > 0) {
+                        results_array.push(pso_collision_and_volumes);
+                        // console.log({pso_collision_and_volumes:pso_collision_and_volumes});
+                        if (pso_collision_and_volumes[0] === false) var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 7] = 1;
+                        else var_and_settings[0][iteration_number*var_and_settings[1].number_of_vars + 7] = 0;
+
+                        if (pso_collision_and_volumes[0] === false) { // No collision
+                            // save successful candidate // TODO: (and validation insertion case and layer)
+                            let lower_surrogate = [];
+                            let empty_array = [];
+                            let data_array = {insertion_case:"unknown"};
+                            if (stack_on_book_index >= 0) {
+                                lower_surrogate.push(all_surrogates[tower_library_index]);
+                            }
+                            let end_height = pso_z + pso_surrogate.height;
+                            let candidate = {
+                                geometry:pso_polygons_list, 
+                                book:pso_surrogate, starting_height:pso_z, 
+                                end_height:end_height, 
+                                down_surrogate:lower_surrogate, 
+                                up_surrogate:empty_array, 
+                                outlines_drawn:0, 
+                                insertion_data:data_array
+                            };
+
+                            check_surrogate_insertion_case(candidate, var_and_settings[1].start_slice, var_and_settings[1]);
+
+                            all_surrogates.push(candidate);
+                            new_surrogates.push(candidate);
+
+
+
+                        } else {
+                            
+                        }
+                    }
+                }
+            }
+
+            let valid_combination = true;
+            let total_surrogates_volume = var_and_settings[1].fitness_offset;
+            let total_collided_surrogates_volume = 0;
+            let interaction_layer_set = new Set();
+            let collision_area_estimate = 0;
+            let surrogate_area_estimate = 0;
+            const number_of_surrogates = all_surrogates.length;
+
+
+            for (const result of results_array) {
+                if (result[0] === true) { // Collided surrogates
+                    valid_combination = false;
+                    const delta_volume = result[1] - result[2];
+                    total_collided_surrogates_volume += delta_volume;
+                    collision_area_estimate += result[3]; // Get overlap area estimate
+                    surrogate_area_estimate += result[4];
+                }
+                else { // Good surrogates
+                    const delta_volume = result[1] - result[2];
+                    total_surrogates_volume += delta_volume; // Get surrogated volume
+                }
+                
+                
+
+                // let delta_volume = result[1] - result[2] + var_and_settings[1].fitness_offset;
+
+            }
+
+            for (const surrogate of all_surrogates) {
+                interaction_layer_set.add(surrogate.insertion_data.new_layer_index) // Get number of interaction layers // TODO: add extra interactions as penalty for difficult surrogates (bridges, stacks...)
+            }
+
+            const number_of_interactions = interaction_layer_set.size;
+            let fitness = 0;
+
+            if (total_surrogates_volume > 0) {
+                // console.log({interaction_layer_set:interaction_layer_set});
+                // console.log({all_surrogates:all_surrogates});
+                const w_pieces = 0.3;
+                const w_interactions = 0.7;
+                const surrogate_N_penalty_factor = 0;//0.8;
+                const interaction_N_penalty_factor = 0;//0.35;
+
+
+                // console.log({total_surrogates_volume:total_surrogates_volume});
+                fitness = total_surrogates_volume / (w_pieces * Math.pow(number_of_surrogates, surrogate_N_penalty_factor) + w_interactions * Math.pow(number_of_interactions, interaction_N_penalty_factor));
+            }
+
+            
+            if (valid_combination) console.log({valid_combination:valid_combination});
+            
+            if (valid_combination === false && total_collided_surrogates_volume > 0) {
+                let overlap_factor = (collision_area_estimate / surrogate_area_estimate);
+                if (overlap_factor > 1) overlap_factor = 1.0;
+                // console.log({overlap_factor:pso_collision_and_volumes[3]});
+                // if (fitness > var_and_settings[1].best_valid) fitness = var_and_settings[1].best_valid;
+                total_collided_surrogates_volume = total_collided_surrogates_volume * (1.0-overlap_factor); // Reduce by overlap percentage
+                if (var_and_settings[1].leniency >= 0) {
+                    if (Math.random() >= var_and_settings[1].leniency) {
+                        // delta_volume = delta_volume * var_and_settings[1].leniency;
+                        fitness = fitness + (total_collided_surrogates_volume)*0.01
+                        // console.log({fitness:fitness});
+                        return fitness; 
+                    }
+                    else {
+                        fitness = fitness + (total_collided_surrogates_volume)*0.01
+                        // console.log({fitness:fitness});
+                        return fitness;
+                    }
+                    // delta_volume = delta_volume * var_and_settings[1].leniency;
+                    // return delta_volume;
+                }
+                else {
+                    // Doesn't happen yet. Restore negative numbers that describe overlap area
+                    console.log({error:"Objective function: Should not have reached this"});
+                }
+            } else {
+                // console.log({fitness:fitness});
+                return fitness; 
+            }
+        }
+
 
         let depth = 0;
 
@@ -2269,6 +2635,12 @@
             listOfOptions.push({height:minimum_prism_height, minHeight:minimum_prism_height, maxHeight:minimum_prism_height+prism_obj.extension_range, id:prism_obj.name, available:true, type:"prism", prism_geometry:prism_obj.geometry_points});
         }
 
+
+        addOption(books, 25.05, 25.05, 18.8, "cube_with_dent");
+        addOption(books, 68.26, 50.46, 13.1, "wood_flat");
+        addOption(books, 137.5, 55.57, 6.62, "wood_plate_small");
+        addOption(books, 183.5, 80.1, 14.7, "foam_plate");
+
         /*
         addStackableOptions(books, 12.75, 9.55, 4, 31.85, 16, "Lego4x2Flat");
         addStackableOptions(books, 3.33, 3.33, 9, 89.9, 93.8, "FloppyDisc");
@@ -2296,8 +2668,8 @@
         // addOption(books, 51, 25, 18.55, "wood_man_hair");
 
         for (let i = 0; i < prisms.length; i++){
-            addPrism(books, prisms[i], 27);
-            console.log({books:books});
+            // addPrism(books, prisms[i], 27);
+            // console.log({books:books});
         }
       
         
@@ -2319,7 +2691,7 @@
 
         let surrogate_settings = {};
 
-        let search_padding = 15;
+        let search_padding = 40; // TODO: Adjust to size of surrogate/largest surrogate?
         // Search bounds
         const min_x = bottom_slice.widget.bounds.min.x - search_padding;
         const max_x = bottom_slice.widget.bounds.max.x + search_padding;
@@ -2330,7 +2702,7 @@
         const shift_x = bottom_slice.widget.track.pos.x;
         const shift_y = bottom_slice.widget.track.pos.y;
         let surrogate_number_goal = 1;
-        let repetition_goal = 1000;
+        let repetition_goal = 1;
         let books_placed = [];
         let try_x = 0;
         let try_y = 0;
@@ -2345,10 +2717,26 @@
         surrogate_settings.min_squish_height = settings.process.sliceHeight/4;
         surrogate_settings.max_droop_height = settings.process.sliceHeight/4;
         surrogate_settings.minimum_clearance_height = settings.process.sliceHeight/4;
+        surrogate_settings.rotations = rotations;
+        surrogate_settings.print_on_surrogate_extra_height_for_extrusion = print_on_surrogate_extra_height_for_extrusion;
+        surrogate_settings.layer_height_fudge = layer_height_fudge;
+        surrogate_settings.searchspace_max_number_of_surrogates = 6; // TODO: higher
+        surrogate_settings.start_slice = bottom_slice;
+        surrogate_settings.existing_surrogates = [];
+        surrogate_settings.number_of_vars = 7; // Number of variables per surrogate PSO test
+
+        surrogate_settings.fitness_offset = 0;
+        surrogate_settings.best_valid = 0;
+        surrogate_settings.leniency = 1.0;
 
         let first_placed = true;
 
         console.log({pause_layers_start: settings.process.gcodePauseLayers});
+
+        console.log({min_x:min_x});
+        console.log({max_x:max_x});
+        console.log({min_y:min_y});
+        console.log({max_y:max_y});
 
         // console.log({widget: bottom_slice.widget});
         // console.log({widget_pos: bottom_slice.widget.track.pos});
@@ -2359,6 +2747,22 @@
         // console.log({shift_x: shift_x});
         // console.log({shift_y: shift_y});
 
+
+        // Testing if parallel.js is working
+        let parallelTest = new PARALLELENV.Parallel([20, 21, 22, 23, 24], {
+            env: {
+              a: 10
+            },
+            envNamespace: 'parallel', 
+            maxWorkers: 12
+        });
+
+        const log = function () { console.log(arguments); };
+        
+        function fib(n) {
+            return n < 2 ? 1 : fib(n - 1) + fib(n - 2);
+          };
+        parallelTest.map(fib).then(log)
 
         // Iterate, placing a book in every iteration
         for (let books_to_place = 0; books_to_place < surrogate_number_goal; books_to_place++) {
@@ -2375,7 +2779,7 @@
             up = bottom_slice;
 
             // Try out random options to place books
-            while (sufficient === false && repetition_counter < (Math.floor(repetition_goal / surrogate_number_goal))) {
+            while (sufficient === false && repetition_counter < (Math.floor(repetition_goal / surrogate_number_goal))) { // Loop mostly deprecated with using PSO, but we could run the optimization multiple times with it
                 let good = true;
                 
                 // Set walking slice to lowest slice
@@ -2403,18 +2807,681 @@
                 try_rotation = rotations[Math.floor(Math.random() * rotations.length)];
                 try_book_index = Math.floor(Math.random() * books.length)
                 try_book = books[try_book_index];
-                let test_book_rectangle_list = []
+                let try_book_polygons_list = []
                 if (try_book.type == "simpleRectangle") {
-                    test_book_rectangle_list = [generateRectanglePolygon(try_x, try_y, up.z, try_book.length, try_book.width, try_rotation, surrogate_settings.surrogate_padding, bottom_slice)];
+                    try_book_polygons_list = [generateRectanglePolygon(try_x, try_y, up.z, try_book.length, try_book.width, try_rotation, surrogate_settings.surrogate_padding, bottom_slice)];
                 }
                 else if (try_book.type == "prism") {
-                    test_book_rectangle_list = [generatePrismPolygon(try_x, try_y, up.z, try_book.prism_geometry, try_rotation, surrogate_settings.surrogate_padding, bottom_slice)];
+                    try_book_polygons_list = [generatePrismPolygon(try_x, try_y, up.z, try_book.prism_geometry, try_rotation, surrogate_settings.surrogate_padding, bottom_slice)];
                 }
                 let collision = false;
                 let overextended = false;
                 let new_volume = 0, old_volume = 0;
                 let delta_volume = 0;
                 let insertion_layer_number_guess = 0;
+
+
+                // Optimizer area ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                var optimizer = new PSO.Optimizer(); // TODO: Add min and max values for particle variable ranges
+                optimizer.surrogate_library = books;
+                optimizer.surrogate_settings = surrogate_settings;
+                // set the objective function
+                optimizer.setObjectiveFunction(function (var_list, done) { 
+                    // let test_x = Math.random() * (max_x - min_x) + min_x;
+                    // let test_y = Math.random() * (max_y - min_y) + min_y;
+                    // let test_z = 0; // TODO: Convert height to slice number???
+                    
+                    // try_rotation = rotations[Math.floor(Math.random() * rotations.length)];
+                    // try_book_index = Math.floor(Math.random() * books.length);
+                    // try_book = books[try_book_index];
+                    //let test_poly = generateRectanglePolygon(test_x, test_y, 0, 100, 50, 0, 0.1);
+                    // console.log({this:this});
+
+
+                    // let parallel_spawner = new PARALLELENV.Parallel([var_list, this.surrogate_settings, this.surrogate_library], {
+                    //     env: {
+                    //       a:10
+                    //     },
+                    //     envNamespace: 'parallel'
+                    // });
+            
+                    // const log = function () { 
+                    //     console.log({note:"Logging_from_parallel"});
+                    //     console.log({arguments_log:arguments});
+                    //     return arguments;
+                    // };
+                    // console.log({note:"Before_parallel"});
+                    // // let temp_fitness = parallel_spawner.spawn(placeAndEval).then(log);
+
+                    // parallel_spawner.spawn(function (data) {
+                    //     placeAndEval(data);
+                    //     return data;
+                    // }).then(function (data) {
+                    //     console.log(data) // logs sdrawrof
+                    // });
+                    // console.log({note:"After_parallel"});
+
+
+
+                    // Parallel bullshit
+                    // console.log({save_settings:this.surrogate_settings.number_of_vars});
+                    // bottom_slice.down = null;
+                    // bottom_slice.up = null;
+                    // const p = new PARALLELENV.Parallel(var_list, {
+                    //     env: {
+                    //         number_of_vars:this.surrogate_settings.number_of_vars,
+                    //         surrogate_padding:this.surrogate_settings.surrogate_padding,
+                    //         min_squish_height:this.surrogate_settings.min_squish_height,
+                    //         max_droop_height:this.surrogate_settings.max_droop_height,
+                    //         minimum_clearance_height:this.surrogate_settings.minimum_clearance_height,
+                    //         rotations:this.surrogate_settings.rotations,
+                    //         print_on_surrogate_extra_height_for_extrusion:this.surrogate_settings.print_on_surrogate_extra_height_for_extrusion,
+                    //         layer_height_fudge:this.surrogate_settings.layer_height_fudge = layer_height_fudge,
+                    //         searchspace_max_number_of_surrogates:this.surrogate_settings.searchspace_max_number_of_surrogates,
+                    //         // start_slice:this.surrogate_settings.start_slice,
+                    //         existing_surrogates:this.surrogate_settings.existing_surrogates,
+                    //         number_of_vars:this.surrogate_settings.number_of_vars,
+                    
+                    //         fitness_offset:this.surrogate_settings.fitness_offset,
+                    //         best_valid:this.surrogate_settings.best_valid,
+                    //         leniency:this.surrogate_settings.leniency,
+
+                    //     }
+                    // });
+
+                    // p.spawn(var_list => {
+                    //     console.log({note:"Doing fucking anything1"});
+                    //     console.log({environment_gotten:global.env.number_of_vars});
+                    //     // for (let INDX = 0; INDX < var_list.length; INDX++) {
+                    //     //     console.log({var_list:var_list[INDX]});
+                    //     // }
+                    //     let all_surrogates = [];
+                    //     for (old_surrogate of this.surrogate_settings.existing_surrogates) {
+                    //         all_surrogates.push(old_surrogate);
+                    //     };
+                    //     let new_surrogates = [];
+                    //     let results_array = [];
+
+                    //     // let pso_collision_and_volumes = checkVolumeAndCollisions(books, optimizer.surrogate_settings, bottom_slice, try_book_index, try_book_polygons_list, try_z, books_placed);
+
+                    //     // for (let iteration_number = 0; iteration_number < this.surrogate_settings.searchspace_max_number_of_surrogates; iteration_number++) {
+                    //     for (let iteration_number = 0; iteration_number < 6; iteration_number++) {
+
+                    //         // if (var_list[0] >= iteration_number) {
+                    //         if(true) {
+                    //             console.log({note:"Doing fucking anything"});
+
+                    //             // Select test surrogate
+                    //             let library_index = Math.floor(var_list[iteration_number*this.surrogate_settings.number_of_vars + 5]);
+                    //             if (library_index >= this.surrogate_library.length) {
+                    //                 library_index = this.surrogate_library.length-1;
+                    //             }
+                    //             else if (library_index < 0) {
+                    //                 library_index = 0;
+                    //             }
+                    //             let pso_surrogate = this.surrogate_library[library_index];
+
+                    //             // Select test tower position/on baseplate
+                    //             let pso_z = 0;
+                    //             let tower_library_index = 0;
+                    //             if (var_list[iteration_number*this.surrogate_settings.number_of_vars + 3] >= 1) {
+                    //                 tower_library_index = 0.99999;
+                    //             }
+                    //             else if (var_list[iteration_number*this.surrogate_settings.number_of_vars + 3] < 0) {
+                    //                 tower_library_index = 0;
+                    //             }
+                    //             else tower_library_index = var_list[iteration_number*this.surrogate_settings.number_of_vars + 3];
+                    //             tower_library_index = Math.floor(tower_library_index * (all_surrogates.length+1)); // #previous surrogates + 1 for on-baseplate
+                    //             tower_library_index = tower_library_index - 1; 
+                    //             if (tower_library_index > 0) pso_z = all_surrogates[tower_library_index].starting_height + all_surrogates[tower_library_index].book.height;
+                                
+
+                                
+                    //             // generate polygons // TODO: Is it faster to make one poly for the surrogate and then rotate+translate /modify the points directly?
+                    //             let pso_polygons_list = []
+                    //             if (pso_surrogate.type == "simpleRectangle") {
+                    //                 pso_polygons_list = [generateRectanglePolygon(var_list[iteration_number*this.surrogate_settings.number_of_vars + 1], var_list[iteration_number*this.surrogate_settings.number_of_vars + 2], this.surrogate_settings.start_slice.z, pso_surrogate.length, pso_surrogate.width, var_list[iteration_number*this.surrogate_settings.number_of_vars + 4], surrogate_settings.surrogate_padding, this.surrogate_settings.start_slice)];
+                    //             }
+                    //             else if (pso_surrogate.type == "prism") {
+                    //                 pso_polygons_list = [generatePrismPolygon(var_list[iteration_number*this.surrogate_settings.number_of_vars + 1], var_list[iteration_number*this.surrogate_settings.number_of_vars + 2], this.surrogate_settings.start_slice.z, pso_surrogate.prism_geometry, var_list[iteration_number*this.surrogate_settings.number_of_vars + 4], surrogate_settings.surrogate_padding, this.surrogate_settings.start_slice)];
+                    //             }
+
+
+                    //             // Out of build-area check
+                    //             for (let pso_poly of pso_polygons_list) {
+                    //                 // translate widget coordinate system to build plate coordinate system and compare with build plate size (center is at 0|0, bottom left is at -Width/2<|-Depth/2)
+                    //                 if (pso_poly.bounds.maxx + shift_x > bedWidthArea || pso_poly.bounds.minx + shift_x < -bedWidthArea || pso_poly.bounds.maxy + shift_y > bedDepthArea || pso_poly.bounds.miny + shift_y < -bedDepthArea || pso_z + pso_surrogate.height > settings.device.bedDepth) {
+                    //                     continue; // TODO: save for return later the negative size of overlap for this test part?
+                    //                 }
+                    //             }
+
+                    //             // Stability check
+                    //             if (tower_library_index >= 0) {
+                    //                 let unsupported_polygons = [];
+                    //                 let unsupp_area = 0, full_area = 0;
+                    //                 POLY.subtract(pso_polygons_list, all_surrogates[tower_library_index].geometry, unsupported_polygons, null, this.surrogate_settings.start_slice.z, min);
+                    //                 unsupported_polygons.forEach(function(unsupp) {
+                    //                     unsupp_area += Math.abs(unsupp.area());
+                    //                 });
+                    //                 pso_polygons_list.forEach(function(full) {
+                    //                     full_area += Math.abs(full.area());
+                    //                 });
+
+                    //                 // If less than half the area of the new book is supported by the book below, surrogate is unstable
+                    //                 //if ((unsupp_area * 2) > full_area) {
+                    //                 // For now, use 100% support instead
+                    //                 if (unsupp_area > 0) {
+                                        
+                    //                     continue;
+                    //                 }
+                    //             }
+
+                    //             let pso_collision_and_volumes = checkVolumeAndCollisions(this.surrogate_library, this.surrogate_settings, this.surrogate_settings.start_slice, library_index, pso_polygons_list, pso_z, all_surrogates);
+                    //             const delta_volume = pso_collision_and_volumes[1] - pso_collision_and_volumes[2];
+                    //             if (delta_volume > 0) {
+                    //                 results_array.push(pso_collision_and_volumes);
+                    //                 // console.log({pso_collision_and_volumes:pso_collision_and_volumes});
+                    //                 if (pso_collision_and_volumes[0] === false) var_list[iteration_number*this.surrogate_settings.number_of_vars + 7] = 1;
+                    //                 else var_list[iteration_number*this.surrogate_settings.number_of_vars + 7] = 0;
+
+                    //                 if (pso_collision_and_volumes[0] === false) { // No collision
+                    //                     // save successful candidate // TODO: (and validation insertion case and layer)
+                    //                     let lower_surrogate = [];
+                    //                     let empty_array = [];
+                    //                     let data_array = {insertion_case:"unknown"};
+                    //                     if (stack_on_book_index >= 0) {
+                    //                         lower_surrogate.push(all_surrogates[tower_library_index]);
+                    //                     }
+                    //                     let end_height = pso_z + pso_surrogate.height;
+                    //                     let candidate = {
+                    //                         geometry:pso_polygons_list, 
+                    //                         book:pso_surrogate, starting_height:pso_z, 
+                    //                         end_height:end_height, 
+                    //                         down_surrogate:lower_surrogate, 
+                    //                         up_surrogate:empty_array, 
+                    //                         outlines_drawn:0, 
+                    //                         insertion_data:data_array
+                    //                     };
+
+                    //                     check_surrogate_insertion_case(candidate, this.surrogate_settings.start_slice, this.surrogate_settings);
+
+                    //                     all_surrogates.push(candidate);
+                    //                     new_surrogates.push(candidate);
+
+
+
+                    //                 } else {
+                                        
+                    //                 }
+                    //             }
+                    //         }
+                    //     }
+
+                    //     let valid_combination = true;
+                    //     let total_surrogates_volume = this.surrogate_settings.fitness_offset;
+                    //     let total_collided_surrogates_volume = 0;
+                    //     let interaction_layer_set = new Set();
+                    //     let collision_area_estimate = 0;
+                    //     let surrogate_area_estimate = 0;
+                    //     const number_of_surrogates = all_surrogates.length;
+
+
+                    //     for (const result of results_array) {
+                    //         if (result[0] === true) { // Collided surrogates
+                    //             valid_combination = false;
+                    //             const delta_volume = result[1] - result[2];
+                    //             total_collided_surrogates_volume += delta_volume;
+                    //             collision_area_estimate += result[3]; // Get overlap area estimate
+                    //             surrogate_area_estimate += result[4];
+                    //         }
+                    //         else { // Good surrogates
+                    //             const delta_volume = result[1] - result[2];
+                    //             total_surrogates_volume += delta_volume; // Get surrogated volume
+                    //         }
+                            
+                            
+
+                    //         // let delta_volume = result[1] - result[2] + this.surrogate_settings.fitness_offset;
+
+                    //     }
+
+                    //     for (const surrogate of all_surrogates) {
+                    //         interaction_layer_set.add(surrogate.insertion_data.new_layer_index) // Get number of interaction layers // TODO: add extra interactions as penalty for difficult surrogates (bridges, stacks...)
+                    //     }
+
+                    //     const number_of_interactions = interaction_layer_set.size;
+                    //     let fitness = 0;
+
+                    //     if (total_surrogates_volume > 0) {
+                    //         // console.log({interaction_layer_set:interaction_layer_set});
+                    //         // console.log({all_surrogates:all_surrogates});
+                    //         const w_pieces = 0.3;
+                    //         const w_interactions = 0.7;
+                    //         const surrogate_N_penalty_factor = 0;//0.8;
+                    //         const interaction_N_penalty_factor = 0;//0.35;
+
+
+                    //         // console.log({total_surrogates_volume:total_surrogates_volume});
+                    //         fitness = total_surrogates_volume / (w_pieces * Math.pow(number_of_surrogates, surrogate_N_penalty_factor) + w_interactions * Math.pow(number_of_interactions, interaction_N_penalty_factor));
+                    //     }
+
+                        
+                    //     if (valid_combination) console.log({valid_combination:valid_combination});
+                        
+                    //     if (valid_combination === false && total_collided_surrogates_volume > 0) {
+                    //         let overlap_factor = (collision_area_estimate / surrogate_area_estimate);
+                    //         if (overlap_factor > 1) overlap_factor = 1.0;
+                    //         // console.log({overlap_factor:pso_collision_and_volumes[3]});
+                    //         // if (fitness > this.surrogate_settings.best_valid) fitness = this.surrogate_settings.best_valid;
+                    //         total_collided_surrogates_volume = total_collided_surrogates_volume * (1.0-overlap_factor); // Reduce by overlap percentage
+                    //         if (this.surrogate_settings.leniency >= 0) {
+                    //             if (Math.random() >= this.surrogate_settings.leniency) {
+                    //                 // delta_volume = delta_volume * this.surrogate_settings.leniency;
+                    //                 fitness = fitness + (total_collided_surrogates_volume)*0.01
+                    //                 console.log({fitness:fitness});
+                    //                 done(fitness); 
+                    //             }
+                    //             else {
+                    //                 fitness = fitness + (total_collided_surrogates_volume)*0.01
+                    //                 console.log({fitness:fitness});
+                    //                 done(fitness);
+                    //             }
+                    //             // delta_volume = delta_volume * this.surrogate_settings.leniency;
+                    //             // return delta_volume;
+                    //         }
+                    //         else {
+                    //             // Doesn't happen yet. Restore negative numbers that describe overlap area
+                    //             console.log({error:"Objective function: Should not have reached this"});
+                    //         }
+                    //     } else {
+                    //         console.log({fitness:fitness});
+                    //         done(fitness); 
+                    //     }
+                    // });
+
+                    // .then(done(data));
+
+                    // let temp_fitness = placeAndEval([var_list, this.surrogate_settings, this.surrogate_library]);
+                    // console.log({temp_fitness:temp_fitness});
+                    // return temp_fitness;
+
+
+
+
+
+                    // Using kiri worker for parallel execution
+                    if (false) {
+                        let temp_worker = new Worker(`/code/worker.js?${self.kiri.version}`);
+
+
+                        let seq = 1000000;
+                        let fun = "surrogate";
+
+                        const state = { zeros: [] };
+                        let encoded_slice = bottom_slice.encode(state);
+                        console.log({encoded_slice:encoded_slice});
+                        let decoded_slice = KIRI.codec.decode(encoded_slice, {mesh:slice.widget.mesh});
+                        console.log({decoded_slice:decoded_slice});
+
+
+                        temp_worker.postMessage({
+                            seq: seq,
+                            task: fun,
+                            time: time(),
+                            data: var_list
+                        }, this.surrogate_settings);
+
+
+                        temp_worker.onmessage = get_message;
+                        
+                        function get_message(data, msg) {
+                            console.log({received_data:data.data.data});
+                            // console.log({received_msg:msg});
+                            done(data.data.data)
+                        }
+                    }
+
+
+                    // placeAndEval function, original source
+                    else {
+                        let all_surrogates = [];
+                        for (old_surrogate of this.surrogate_settings.existing_surrogates) {
+                            all_surrogates.push(old_surrogate);
+                        };
+                        let new_surrogates = [];
+                        let results_array = [];
+
+                        // let pso_collision_and_volumes = checkVolumeAndCollisions(books, optimizer.surrogate_settings, bottom_slice, try_book_index, try_book_polygons_list, try_z, books_placed);
+
+                        for (let iteration_number = 0; iteration_number < this.surrogate_settings.searchspace_max_number_of_surrogates; iteration_number++) {
+
+                            // if (var_list[0] >= iteration_number) {
+                            if(true) {
+
+                                // Select test surrogate
+                                let library_index = Math.floor(var_list[iteration_number*this.surrogate_settings.number_of_vars + 5]);
+                                if (library_index >= this.surrogate_library.length) {
+                                    library_index = this.surrogate_library.length-1;
+                                }
+                                else if (library_index < 0) {
+                                    library_index = 0;
+                                }
+                                let pso_surrogate = this.surrogate_library[library_index];
+
+                                // Select test tower position/on baseplate
+                                let pso_z = 0;
+                                let tower_library_index = 0;
+                                if (var_list[iteration_number*this.surrogate_settings.number_of_vars + 3] >= 1) {
+                                    tower_library_index = 0.99999;
+                                }
+                                else if (var_list[iteration_number*this.surrogate_settings.number_of_vars + 3] < 0) {
+                                    tower_library_index = 0;
+                                }
+                                else tower_library_index = var_list[iteration_number*this.surrogate_settings.number_of_vars + 3];
+                                tower_library_index = Math.floor(tower_library_index * (all_surrogates.length+1)); // #previous surrogates + 1 for on-baseplate
+                                tower_library_index = tower_library_index - 1; 
+                                if (tower_library_index > 0) pso_z = all_surrogates[tower_library_index].starting_height + all_surrogates[tower_library_index].book.height;
+                                
+
+                                
+                                // generate polygons // TODO: Is it faster to make one poly for the surrogate and then rotate+translate /modify the points directly?
+                                let pso_polygons_list = []
+                                if (pso_surrogate.type == "simpleRectangle") {
+                                    pso_polygons_list = [generateRectanglePolygon(var_list[iteration_number*this.surrogate_settings.number_of_vars + 1], var_list[iteration_number*this.surrogate_settings.number_of_vars + 2], this.surrogate_settings.start_slice.z, pso_surrogate.length, pso_surrogate.width, var_list[iteration_number*this.surrogate_settings.number_of_vars + 4], surrogate_settings.surrogate_padding, this.surrogate_settings.start_slice)];
+                                }
+                                else if (pso_surrogate.type == "prism") {
+                                    pso_polygons_list = [generatePrismPolygon(var_list[iteration_number*this.surrogate_settings.number_of_vars + 1], var_list[iteration_number*this.surrogate_settings.number_of_vars + 2], this.surrogate_settings.start_slice.z, pso_surrogate.prism_geometry, var_list[iteration_number*this.surrogate_settings.number_of_vars + 4], surrogate_settings.surrogate_padding, this.surrogate_settings.start_slice)];
+                                }
+
+
+                                // Out of build-area check
+                                for (let pso_poly of pso_polygons_list) {
+                                    // translate widget coordinate system to build plate coordinate system and compare with build plate size (center is at 0|0, bottom left is at -Width/2<|-Depth/2)
+                                    if (pso_poly.bounds.maxx + shift_x > bedWidthArea || pso_poly.bounds.minx + shift_x < -bedWidthArea || pso_poly.bounds.maxy + shift_y > bedDepthArea || pso_poly.bounds.miny + shift_y < -bedDepthArea || pso_z + pso_surrogate.height > settings.device.bedDepth) {
+                                        continue; // TODO: save for return later the negative size of overlap for this test part?
+                                    }
+                                }
+
+                                // Stability check
+                                if (tower_library_index >= 0) {
+                                    let unsupported_polygons = [];
+                                    let unsupp_area = 0, full_area = 0;
+                                    POLY.subtract(pso_polygons_list, all_surrogates[tower_library_index].geometry, unsupported_polygons, null, this.surrogate_settings.start_slice.z, min);
+                                    unsupported_polygons.forEach(function(unsupp) {
+                                        unsupp_area += Math.abs(unsupp.area());
+                                    });
+                                    pso_polygons_list.forEach(function(full) {
+                                        full_area += Math.abs(full.area());
+                                    });
+
+                                    // If less than half the area of the new book is supported by the book below, surrogate is unstable
+                                    //if ((unsupp_area * 2) > full_area) {
+                                    // For now, use 100% support instead
+                                    if (unsupp_area > 0) {
+                                        
+                                        continue;
+                                    }
+                                }
+
+                                let pso_collision_and_volumes = checkVolumeAndCollisions(this.surrogate_library, this.surrogate_settings, this.surrogate_settings.start_slice, library_index, pso_polygons_list, pso_z, all_surrogates);
+                                const delta_volume = pso_collision_and_volumes[1] - pso_collision_and_volumes[2];
+                                if (delta_volume > 0) {
+                                    results_array.push(pso_collision_and_volumes);
+                                    // console.log({pso_collision_and_volumes:pso_collision_and_volumes});
+                                    if (pso_collision_and_volumes[0] === false) var_list[iteration_number*this.surrogate_settings.number_of_vars + 7] = 1;
+                                    else var_list[iteration_number*this.surrogate_settings.number_of_vars + 7] = 0;
+
+                                    if (pso_collision_and_volumes[0] === false) { // No collision
+                                        // save successful candidate // TODO: (and validation insertion case and layer)
+                                        let lower_surrogate = [];
+                                        let empty_array = [];
+                                        let data_array = {insertion_case:"unknown"};
+                                        if (stack_on_book_index >= 0) {
+                                            lower_surrogate.push(all_surrogates[tower_library_index]);
+                                        }
+                                        let end_height = pso_z + pso_surrogate.height;
+                                        let candidate = {
+                                            geometry:pso_polygons_list, 
+                                            book:pso_surrogate, starting_height:pso_z, 
+                                            end_height:end_height, 
+                                            down_surrogate:lower_surrogate, 
+                                            up_surrogate:empty_array, 
+                                            outlines_drawn:0, 
+                                            insertion_data:data_array
+                                        };
+
+                                        check_surrogate_insertion_case(candidate, this.surrogate_settings.start_slice, this.surrogate_settings);
+
+                                        all_surrogates.push(candidate);
+                                        new_surrogates.push(candidate);
+
+
+
+                                    } else {
+                                        
+                                    }
+                                }
+                            }
+                        }
+
+                        let valid_combination = true;
+                        let total_surrogates_volume = this.surrogate_settings.fitness_offset;
+                        let total_collided_surrogates_volume = 0;
+                        let interaction_layer_set = new Set();
+                        let collision_area_estimate = 0;
+                        let surrogate_area_estimate = 0;
+                        const number_of_surrogates = all_surrogates.length;
+
+
+                        for (const result of results_array) {
+                            if (result[0] === true) { // Collided surrogates
+                                valid_combination = false;
+                                const delta_volume = result[1] - result[2];
+                                total_collided_surrogates_volume += delta_volume;
+                                collision_area_estimate += result[3]; // Get overlap area estimate
+                                surrogate_area_estimate += result[4];
+                            }
+                            else { // Good surrogates
+                                const delta_volume = result[1] - result[2];
+                                total_surrogates_volume += delta_volume; // Get surrogated volume
+                            }
+                            
+                            
+
+                            // let delta_volume = result[1] - result[2] + this.surrogate_settings.fitness_offset;
+
+                        }
+
+                        for (const surrogate of all_surrogates) {
+                            interaction_layer_set.add(surrogate.insertion_data.new_layer_index) // Get number of interaction layers // TODO: add extra interactions as penalty for difficult surrogates (bridges, stacks...)
+                        }
+
+                        const number_of_interactions = interaction_layer_set.size;
+                        let fitness = 0;
+
+                        if (total_surrogates_volume > 0) {
+                            // console.log({interaction_layer_set:interaction_layer_set});
+                            // console.log({all_surrogates:all_surrogates});
+                            const w_pieces = 0.3;
+                            const w_interactions = 0.7;
+                            const surrogate_N_penalty_factor = 0;//0.8;
+                            const interaction_N_penalty_factor = 0;//0.35;
+
+
+                            // console.log({total_surrogates_volume:total_surrogates_volume});
+                            fitness = total_surrogates_volume / (w_pieces * Math.pow(number_of_surrogates, surrogate_N_penalty_factor) + w_interactions * Math.pow(number_of_interactions, interaction_N_penalty_factor));
+                        }
+
+                        
+                        if (valid_combination) console.log({valid_combination:valid_combination});
+                        
+                        if (valid_combination === false && total_collided_surrogates_volume > 0) {
+                            let overlap_factor = (collision_area_estimate / surrogate_area_estimate);
+                            if (overlap_factor > 1) overlap_factor = 1.0;
+                            // console.log({overlap_factor:pso_collision_and_volumes[3]});
+                            // if (fitness > this.surrogate_settings.best_valid) fitness = this.surrogate_settings.best_valid;
+                            total_collided_surrogates_volume = total_collided_surrogates_volume * (1.0-overlap_factor); // Reduce by overlap percentage
+                            if (this.surrogate_settings.leniency >= 0) {
+                                if (Math.random() >= this.surrogate_settings.leniency) {
+                                    // delta_volume = delta_volume * this.surrogate_settings.leniency;
+                                    fitness = fitness + (total_collided_surrogates_volume)*0.01
+                                    // console.log({fitness:fitness});
+                                    done(fitness); 
+                                }
+                                else {
+                                    fitness = fitness + (total_collided_surrogates_volume)*0.01
+                                    // console.log({fitness:fitness});
+                                    done(fitness);
+                                }
+                                // delta_volume = delta_volume * this.surrogate_settings.leniency;
+                                // return delta_volume;
+                            }
+                            else {
+                                // Doesn't happen yet. Restore negative numbers that describe overlap area
+                                console.log({error:"Objective function: Should not have reached this"});
+                            }
+                        } else {
+                            // console.log({fitness:fitness});
+                            done(fitness); 
+                        }
+                    }
+                }, {
+                    async: true
+                });
+
+                let pso_variable_list = [
+                    { start: 0, end: surrogate_settings.searchspace_max_number_of_surrogates}// Meta: # of surrogates to be placed
+                ];
+
+                for (let pso_variables_idx = 0; pso_variables_idx < surrogate_settings.searchspace_max_number_of_surrogates; pso_variables_idx += 1) {
+                    // Could give each block a yes/no variable instead of the meta-#-of-surrogates
+                    pso_variable_list.push({ start: min_x, end: max_x});    // 1: X position
+                    pso_variable_list.push({ start: min_y, end: max_y});    // 2: Y position
+                    pso_variable_list.push({ start: 0, end: 1});            // 3: Z index, mapped from 0-1 to integer (If there are two options (on buildplate or on one surrogate), <=0.5 is on buildplate, >0.5 is on surrogate)
+                    pso_variable_list.push({ start: 0, end: 360});          // 4: Rotation in degrees
+                    // Z height from 0 to model_height for bridge surrogates
+                    // yes/no switch between index-height and absolute-height method
+                    pso_variable_list.push({ start: 0, end: optimizer.surrogate_library.length}); 
+                                                                            // 5: Which surrogate was placed: library index, mapped from 0 to library_length
+                    pso_variable_list.push({ start: 0, end: 1});            // 6: Target extension for height-varying surrogates, 0 = min_height, 1 = max_height
+                    pso_variable_list.push({ start: 0, end: 1});            // 7: local meta variable: if this surrogate data should be used or not
+                }
+
+                // TODO: Sort surrogate library by ??? surface area? height? volume?
+
+                // set an initial population of 20 particles spread across the search space *[-10, 10] x [-10, 10]*
+                optimizer.init(4, pso_variable_list);
+
+                // run the optimizer 40 iterations
+                let improvement_Decay = 0;
+                let last_Best = 0;
+                let consecutive_weak_steps = 0;
+                let offset_set = false;
+                // for (var i = 0; i < 100; i++) {
+                //     optimizer.step();
+                //     let stepFitness = optimizer.getBestFitness();
+                //     console.log({fitness:stepFitness});
+                    
+                    
+                //     if (optimizer.surrogate_settings.leniency > 0) {
+                //         optimizer.surrogate_settings.leniency = optimizer.surrogate_settings.leniency * 0.2;
+                //         // optimizer.surrogate_settings.fitness_offset = stepFitness + stepFitness * optimizer.surrogate_settings.leniency;
+                //         if (optimizer.surrogate_settings.leniency < 0.1) optimizer.surrogate_settings.leniency = 0;
+                //         // optimizer._bestPositionEver = null;
+                //         // optimizer._bestFitnessEver = -Infinity;
+
+                //     } else {
+                //         // if (offset_set === false) {
+                //         //     optimizer.surrogate_settings.fitness_offset = stepFitness;
+                //         //     offset_set = true;
+                //         // }
+                //         improvement_Decay = (improvement_Decay + stepFitness - last_Best) * 0.05;
+                //         console.log({improvement_Decay:improvement_Decay});
+                //         if (improvement_Decay < 15) {
+                //             consecutive_weak_steps++;
+                //         }
+                //         else consecutive_weak_steps = 0;
+
+                //         if (consecutive_weak_steps > 10) break;
+                //     }
+                //     last_Best = stepFitness;
+                //     surrogate_settings.best_valid = last_Best;
+                // }
+
+                var iterations = 0, maxIterations = 5;
+                function loop() {
+                    if (iterations >= maxIterations) { // TODO: Need handling of further execution if this case is reached
+                        log('Max iterations reached.');
+                    } else {
+
+                        iterations++;
+                        log('\nIteration ' + iterations + '/' + maxIterations + ' ');
+
+                        let stepFitness = optimizer.getBestFitness();
+                        console.log({fitness:stepFitness});
+                        
+                        
+                        if (optimizer.surrogate_settings.leniency > 0) {
+                            optimizer.surrogate_settings.leniency = optimizer.surrogate_settings.leniency * 0.2;
+                            // optimizer.surrogate_settings.fitness_offset = stepFitness + stepFitness * optimizer.surrogate_settings.leniency;
+                            if (optimizer.surrogate_settings.leniency < 0.1) optimizer.surrogate_settings.leniency = 0;
+                            // optimizer._bestPositionEver = null;
+                            // optimizer._bestFitnessEver = -Infinity;
+
+                        } else {
+                            // if (offset_set === false) {
+                            //     optimizer.surrogate_settings.fitness_offset = stepFitness;
+                            //     offset_set = true;
+                            // }
+                            improvement_Decay = (improvement_Decay + stepFitness - last_Best) * 0.05;
+                            console.log({improvement_Decay:improvement_Decay});
+                            if (improvement_Decay < 15) {
+                                consecutive_weak_steps++;
+                            }
+                            else consecutive_weak_steps = 0;
+
+                            if (consecutive_weak_steps > 10) return;
+                        }
+                        last_Best = stepFitness;
+                        surrogate_settings.best_valid = last_Best;
+
+                        optimizer.step(loop);
+                    }
+                }
+            
+                log('Starting optimizer');
+                loop();
+
+                // print the best found fitness value and position in the search space
+                console.log(optimizer.getBestFitness(), optimizer.getBestPosition());
+                // Optimizer area ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+                let pso_position_vars = optimizer.getBestPosition();
+
+                try_x = pso_position_vars[1];
+                try_y = pso_position_vars[2];
+
+                let pso_chosen_book = Math.floor(pso_position_vars[5]);
+                if (pso_chosen_book >= books.length) {
+                    pso_chosen_book = books.length-1;
+                }
+                else if (pso_chosen_book < 0) {
+                    pso_chosen_book = 0;
+                }
+                // let pso_chosen_book = pso_position_vars[5];
+                // if (pso_chosen_book < 0) pso_chosen_book = 0;
+                // else if (pso_chosen_book >= books.length) pso_chosen_book = books.length-1;
+                // try_book = books[Math.floor(pso_chosen_book)];
+                try_rotation = pso_position_vars[4];
+
+                if (try_book.type == "simpleRectangle") {
+                    try_book_polygons_list = [generateRectanglePolygon(try_x, try_y, up.z, try_book.length, try_book.width, try_rotation, surrogate_settings.surrogate_padding, bottom_slice)];
+                }
+                else if (try_book.type == "prism") {
+                    try_book_polygons_list = [generatePrismPolygon(try_x, try_y, up.z, try_book.prism_geometry, try_rotation, surrogate_settings.surrogate_padding, bottom_slice)];
+                }
+
+                
 
 
                 // Check if surrogate is available
@@ -2424,36 +3491,50 @@
                     continue;
                 }
 
+                // Rotation debug test
+                // if (first_placed === true) {
+                //     rotations.forEach(function(rotation) {
+                //         if (rotation < 130) {
+                //             console.log({rotation:rotation});
+                //             // let rot_test_geometry_list = [generateRectanglePolygon(try_x, try_y, 0, 50, 100, rotation, surrogate_settings.surrogate_padding, bottom_slice)];
+                //             let rot_test_geometry_list = [generatePrismPolygon(try_x, try_y, up.z, try_book.prism_geometry, rotation, surrogate_settings.surrogate_padding, bottom_slice)];
+                //             bottom_slice.tops[0].shells.push(rot_test_geometry_list[0]);
+                //         }
+
+                //     });
+                //     first_placed = false;
+                // }
+
 
                 // Check that surrogates don't end on consecutive layers
 
                 
 
-                // Out of build-area check
-                for (let book_poly of test_book_rectangle_list) {
-                    // translate widget coordinate system to build plate coordinate system and compare with build plate size (center is at 0|0, bottom left is at -Width/2<|-Depth/2)
-                    if (book_poly.bounds.maxx + shift_x > bedWidthArea || book_poly.bounds.minx + shift_x < -bedWidthArea || book_poly.bounds.maxy + shift_y > bedDepthArea || book_poly.bounds.miny + shift_y < -bedDepthArea || try_z + try_book.height > settings.device.bedDepth) {
-                        // console.log({text:"Out of build area"});
-                        // console.log({book_poly_bounds:book_poly.bounds})
-                        // console.log({y_max:book_poly.bounds.maxy + shift_y})
-                        // console.log({y_min:book_poly.bounds.miny + shift_y})
-                        // console.log({max_area:bedDepthArea})
-                        // console.log({min_area:-bedDepthArea})
-                        repetition_counter++;
-                        good = false;
-                        continue;
-                    }
-                }
+                // // Out of build-area check
+                // for (let book_poly of try_book_polygons_list) {
+                //     // translate widget coordinate system to build plate coordinate system and compare with build plate size (center is at 0|0, bottom left is at -Width/2<|-Depth/2)
+                //     if (book_poly.bounds.maxx + shift_x > bedWidthArea || book_poly.bounds.minx + shift_x < -bedWidthArea || book_poly.bounds.maxy + shift_y > bedDepthArea || book_poly.bounds.miny + shift_y < -bedDepthArea || try_z + try_book.height > settings.device.bedDepth) {
+                //         // console.log({text:"Out of build area"});
+                //         // console.log({book_poly_bounds:book_poly.bounds})
+                //         // console.log({y_max:book_poly.bounds.maxy + shift_y})
+                //         // console.log({y_min:book_poly.bounds.miny + shift_y})
+                //         // console.log({max_area:bedDepthArea})
+                //         // console.log({min_area:-bedDepthArea})
+                //         repetition_counter++;
+                //         good = false;
+                //         continue;
+                //     }
+                // }
 
                 // Stability check
                 if (stack_on_book_index >= 0) {
                     let unsupported_polygons = [];
                     let unsupp_area = 0, full_area = 0;
-                    POLY.subtract(test_book_rectangle_list, books_placed[stack_on_book_index].geometry, unsupported_polygons, null, up.z, min);
+                    POLY.subtract(try_book_polygons_list, books_placed[stack_on_book_index].geometry, unsupported_polygons, null, up.z, min);
                     unsupported_polygons.forEach(function(unsupp) {
                         unsupp_area += Math.abs(unsupp.area());
                     });
-                    test_book_rectangle_list.forEach(function(full) {
+                    try_book_polygons_list.forEach(function(full) {
                         full_area += Math.abs(full.area());
                     });
 
@@ -2467,189 +3548,244 @@
                     }
                 }
 
-                // // Get surrogate replaced volume
-                // let iterate_layers_over_surrogate_height = bottom_slice;
-                // while (iterate_layers_over_surrogate_height) {
-                //     // Skip layers that are under the start height of the surrogate
-                //     if (iterate_layers_over_surrogate_height.z < try_z) { // Approximation: If more than half of the slice height is surrogated, we count it fully 
-                //         iterate_layers_over_surrogate_height = iterate_layers_over_surrogate_height.up;
-                //         continue;
-                //     } 
-
-                //     // Skip layers that have no supports
-                //     else if (!iterate_layers_over_surrogate_height.supports || iterate_layers_over_surrogate_height.supports.length === 0) {
-                //         iterate_layers_over_surrogate_height = iterate_layers_over_surrogate_height.up;
-                //         continue;
-                //     }
-                //     // Stop counting volume surrogate height has passed 
-                //     else {
-                //         let slice_height_range = get_height_range(iterate_layers_over_surrogate_height);
-                //         if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) >= (try_book.height + try_z)) {
-                //             break;
-                //         }
-                //     }
-                    
-                //     const volumes = getSurrogateReplacedVolumes(old_volume, new_volume, iterate_layers_over_surrogate_height, test_book_rectangle_list);
-                //     old_volume = volumes[0];
-                //     new_volume = volumes[1];
-
-
-                //     // let unioned_supports = POLY.union(iterate_layers_over_surrogate_height.supports, null, true);
-                //     // let combined_supports = POLY.flatten(iterate_layers_over_surrogate_height.supports);
-                //     // console.log({unioned_supports:unioned_supports});
-                //     // iterate_layers_over_surrogate_height.tops[0].fill_sparse.push(unioned_supports);
-
-                //     if (!first_placed) {
-                //         if (!iterate_layers_over_surrogate_height.tops[0].fill_sparse) iterate_layers_over_surrogate_height.tops[0].fill_sparse = [];
-                //         iterate_layers_over_surrogate_height.supports.forEach(function(supp) {
-                //             iterate_layers_over_surrogate_height.tops[0].fill_sparse.push(supp);
-                //         });
+                for (let pso_result_surrogate_index = 0; pso_result_surrogate_index < surrogate_settings.searchspace_max_number_of_surrogates; pso_result_surrogate_index++) {
+                    if (pso_position_vars[pso_result_surrogate_index * surrogate_settings.number_of_vars + 7] > 0.999999 && pso_position_vars[pso_result_surrogate_index * surrogate_settings.number_of_vars + 7] < 1.000001) {// If surrogate was placed without problem by PSO
                         
-                        
-                //         iterate_layers_over_surrogate_height.tops[0].fill_sparse.push(test_book_rectangle_list[0]);
-                //         first_placed = true;
-                //     }
+                        try_x = pso_position_vars[pso_result_surrogate_index * surrogate_settings.number_of_vars + 1];
+                        try_y = pso_position_vars[pso_result_surrogate_index * surrogate_settings.number_of_vars + 2];
 
+                        // Select test tower position/on baseplate
+                        try_z = 0;
+                        let tower_library_index = 0;
+                        if (pso_position_vars[pso_result_surrogate_index*surrogate_settings.number_of_vars + 3] >= 1) {
+                            tower_library_index = 0.99999;
+                        }
+                        else if (pso_position_vars[pso_result_surrogate_index*surrogate_settings.number_of_vars + 3] < 0) {
+                            tower_library_index = 0;
+                        }
+                        else tower_library_index = pso_position_vars[pso_result_surrogate_index*surrogate_settings.number_of_vars + 3];
+                        tower_library_index = Math.floor(tower_library_index * (books_placed.length+1)); // #previous surrogates + 1 for on-baseplate
+                        tower_library_index = tower_library_index - 1; 
+                        if (tower_library_index > 0) try_z = books_placed[tower_library_index].starting_height + books_placed[tower_library_index].book.height;
+        
+                        // Select chosen surrogate
+                        let pso_chosen_book = Math.floor(pso_position_vars[pso_result_surrogate_index * surrogate_settings.number_of_vars + 5]);
+                        if (pso_chosen_book >= books.length) {
+                            pso_chosen_book = books.length-1;
+                        }
+                        else if (pso_chosen_book < 0) {
+                            pso_chosen_book = 0;
+                        }
 
+                        try_book = books[pso_chosen_book];
+
+                        try_rotation = pso_position_vars[pso_result_surrogate_index * surrogate_settings.number_of_vars + 4];
+        
+                        if (try_book.type == "simpleRectangle") {
+                            try_book_polygons_list = [generateRectanglePolygon(try_x, try_y, up.z, try_book.length, try_book.width, try_rotation, surrogate_settings.surrogate_padding, bottom_slice)];
+                        }
+                        else if (try_book.type == "prism") {
+                            try_book_polygons_list = [generatePrismPolygon(try_x, try_y, up.z, try_book.prism_geometry, try_rotation, surrogate_settings.surrogate_padding, bottom_slice)];
+                        }
                     
+                    
+                        // generate candidate and validation insertion case and layer
+                        let lower_book = [];
+                        let empty_array = [];
+                        let data_array = {insertion_case:"unknown"};
+                        if (stack_on_book_index >= 0) {
+                            lower_book.push(books_placed[stack_on_book_index]);
+                        }
+                        let end_height = try_z + try_book.height;
+                        let candidate = {
+                            geometry:try_book_polygons_list, 
+                            book:try_book, starting_height:try_z, 
+                            end_height:end_height, 
+                            down_surrogate:lower_book, 
+                            up_surrogate:empty_array, 
+                            outlines_drawn:0, 
+                            insertion_data:data_array
+                        };
 
+                        // console.log({candidate:candidate});
+                        check_surrogate_insertion_case(candidate, bottom_slice, surrogate_settings);
 
-                //     iterate_layers_over_surrogate_height = iterate_layers_over_surrogate_height.up;
-                // }
+                        // Check if it is on a consecutive layer from a previous surrogate
+                        let consecutive = false;
+                        books_placed.forEach(function(surrogate) {
+                            if (Math.abs(candidate.insertion_data.index - surrogate.insertion_data.index) === 1) {
+                                consecutive = true;
+                            }
+                        });
+                        if (consecutive) {
+                            good = false;
+                            // repetition_counter++;
+                            // continue;
+                        }
+
+                        books_placed.push(candidate);
+                        candidate.book.available = false; // Mark book as used
+        
+                        console.log({placed_book_name:candidate.book.id});
+
+                    }
+                }
                 
-                // console.log({delta_volume:delta_volume});
+
+
+
+
+                let collision_and_volumes = [];
 
                 // Check collisions and calculate volume
                 if (true) {
-                    let iterate_layers_VandC = bottom_slice;
 
-                    // Check for collision for the whole surrogate height
-                    while (collision === false && iterate_layers_VandC && overextended === false) { // Stop after first collision found, or end of widget reached
-                        
-                        // Increase height until surrogate starting height is reached 
-                        // Approximation: If more than half of the slice height is surrogated, we count it fully (for volume) #TODO: for collisions we might want to check for ANY overlap
-                        if (iterate_layers_VandC.z < try_z) { // LWW TODO: Check at what height we actually want to start checking for collisions
-                            iterate_layers_VandC = iterate_layers_VandC.up;
-                            // console.log({going_up: "Going up because book is not on buildplate my DUDE!!!!!!!"});
-                            continue;
-                        }
+                    collision_and_volumes = checkVolumeAndCollisions(books, optimizer.surrogate_settings, bottom_slice, try_book_index, try_book_polygons_list, try_z, books_placed);
 
-                        // DON'T skip the layers, since we are looking for model polygons and previous surrogate supports
-                        // Skip layers without support
-                        // if (!iterate_layers_VandC.supports || iterate_layers_VandC.supports.length === 0) {
-                        //     iterate_layers_VandC = iterate_layers_VandC.up;
-                        //     console.log({going_up: "No support to check for collision found on this slice"});
-                        //     continue;
-                        // }
+                    // console.log({collision_and_volumes:collision_and_volumes});
+                    if (false) {
+                        let iterate_layers_VandC = bottom_slice;
 
-
-                        let calculating_volume = true;
-                        let check_collisions = true;
-                        let slice_height_range = get_height_range(iterate_layers_VandC);
-                        
-                        // Skip volume count for layers that have no supports
-                        if (!iterate_layers_VandC.supports || iterate_layers_VandC.supports.length === 0) {
-                            calculating_volume = false;
-                        }
-                        // Stop counting volume once surrogate height has passed 
-                        else if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) >= (try_book.maxHeight + try_z)){
-                            calculating_volume = false;
-                        }
-
-                        // stop checking collisions when surrogate top is higher than slice bottom + min squish height 
-                        if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) >= (try_book.maxHeight + try_z)) { 
-                            check_collisions = false;
-                        }
-                        
-                        if (calculating_volume) {
-                            const volumes = getSurrogateReplacedVolumes(old_volume, new_volume, iterate_layers_VandC, test_book_rectangle_list);
-                            old_volume = volumes[0];
-                            new_volume = volumes[1];
-                        }
-
-                        if (check_collisions) {
-                            let collision_detection = [];
-                            POLY.subtract(iterate_layers_VandC.topPolys(), test_book_rectangle_list, collision_detection, null, iterate_layers_VandC.z, min);
-                            // console.log({test_book_rectangle_list:test_book_rectangle_list});
+                        // Check for collision for the whole surrogate height
+                        while (collision === false && iterate_layers_VandC && overextended === false) { // Stop after first collision found, or end of widget reached
                             
-                            let post_collision_area = 0, pre_collision_area = 0;
-                            iterate_layers_VandC.topPolys().forEach(function(top_poly) {
-                                pre_collision_area += Math.abs(top_poly.area());
-                            });
-                            collision_detection.forEach(function(top_poly) {
-                                post_collision_area += Math.abs(top_poly.area());
-                            });
-                            
-                            if (Math.abs(post_collision_area - pre_collision_area) > 0.00001) { // rounded the same
-                                if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) < (try_book.minHeight + try_z)) {
-                                    collision = true;
-                                    continue;
-                                }
-                                else {
-                                    try_book.height = iterate_layers_VandC.down.z; // TODO: Test whether this is the best previous height
-                                    overextended = true;
-                                    continue;
-                                }
-                                //console.log({collision_true: post_collision_area - pre_collision_area});
+                            // Increase height until surrogate starting height is reached 
+                            // Approximation: If more than half of the slice height is surrogated, we count it fully (for volume) #TODO: for collisions we might want to check for ANY overlap
+                            if (iterate_layers_VandC.z < try_z) { // LWW TODO: Check at what height we actually want to start checking for collisions
+                                iterate_layers_VandC = iterate_layers_VandC.up;
+                                // console.log({going_up: "Going up because book is not on buildplate my DUDE!!!!!!!"});
+                                continue;
                             }
 
-                            // Check collision with already placed surrogates as well
+                            // DON'T skip the layers, since we are looking for model polygons and previous surrogate supports
+                            // Skip layers without support
+                            // if (!iterate_layers_VandC.supports || iterate_layers_VandC.supports.length === 0) {
+                            //     iterate_layers_VandC = iterate_layers_VandC.up;
+                            //     console.log({going_up: "No support to check for collision found on this slice"});
+                            //     continue;
+                            // }
+
+
+                            let calculating_volume = true;
+                            let check_collisions = true;
+                            let slice_height_range = get_height_range(iterate_layers_VandC);
                             
-                            if (books_placed.length >= 1) {
+                            // Skip volume count for layers that have no supports
+                            if (!iterate_layers_VandC.supports || iterate_layers_VandC.supports.length === 0) {
+                                calculating_volume = false;
+                            }
+                            // Stop counting volume once surrogate height has passed 
+                            else if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) >= (try_book.maxHeight + try_z)){
+                                calculating_volume = false;
+                            }
+
+                            // stop checking collisions when surrogate top is higher than slice bottom + min squish height 
+                            if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) >= (try_book.maxHeight + try_z)) { 
+                                check_collisions = false;
+                            }
+                            
+                            if (calculating_volume) {
+                                const volumes = getSurrogateReplacedVolumes(old_volume, new_volume, iterate_layers_VandC, try_book_polygons_list);
+                                old_volume = volumes[0];
+                                new_volume = volumes[1];
+                            }
+
+                            if (check_collisions) {
+                                let collision_detection = [];
+                                POLY.subtract(iterate_layers_VandC.topPolys(), try_book_polygons_list, collision_detection, null, iterate_layers_VandC.z, min);
+                                // console.log({try_book_polygons_list:try_book_polygons_list});
                                 
-                                for (let books_placed_idx = 0; books_placed_idx < books_placed.length; books_placed_idx++) {
-                                    let previous_surrogate = books_placed[books_placed_idx];
+                                let post_collision_area = 0, pre_collision_area = 0;
+                                iterate_layers_VandC.topPolys().forEach(function(top_poly) {
+                                    pre_collision_area += Math.abs(top_poly.area());
+                                });
+                                collision_detection.forEach(function(top_poly) {
+                                    post_collision_area += Math.abs(top_poly.area());
+                                });
+                                
+                                if (Math.abs(post_collision_area - pre_collision_area) > 0.00001) { // rounded the same
+                                    if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) < (try_book.minHeight + try_z)) {
+                                        collision = true;
+                                        console.log(Math.abs(post_collision_area - pre_collision_area));
+                                        continue;
+                                    }
+                                    else {
+                                        try_book.height = iterate_layers_VandC.down.z; // TODO: Test whether this is the best previous height
+                                        overextended = true;
+                                        continue;
+                                    }
+                                    //console.log({collision_true: post_collision_area - pre_collision_area});
+                                }
 
-                                    if (iterate_layers_VandC.z <= (previous_surrogate.book.height + previous_surrogate.starting_height) && iterate_layers_VandC.z >= previous_surrogate.starting_height) {
+                                // Check collision with already placed surrogates as well
+                                
+                                if (books_placed.length >= 1) {
+                                    
+                                    for (let books_placed_idx = 0; books_placed_idx < books_placed.length; books_placed_idx++) {
+                                        let previous_surrogate = books_placed[books_placed_idx];
 
-                                        collision_detection = [];
-                                        
-                                        POLY.subtract(test_book_rectangle_list, previous_surrogate.geometry, collision_detection, null, iterate_layers_VandC.z, min); // TODO: Check if Z matters
-                                        
-                                        post_collision_area = 0;
-                                        pre_collision_area = 0;
-                                        test_book_rectangle_list.forEach(function(top_poly) {
-                                            pre_collision_area += Math.abs(top_poly.area());
-                                        });
-                                        collision_detection.forEach(function(top_poly) {
-                                            post_collision_area += Math.abs(top_poly.area());
-                                        });
-                                        
-                                        if (Math.abs(post_collision_area - pre_collision_area) > 0.00001) {
-                                            if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) < (try_book.minHeight + try_z)) {
-                                                collision = true;
-                                                continue;
+                                        if (iterate_layers_VandC.z <= (previous_surrogate.book.height + previous_surrogate.starting_height) && iterate_layers_VandC.z >= previous_surrogate.starting_height) {
+
+                                            collision_detection = [];
+                                            
+                                            POLY.subtract(try_book_polygons_list, previous_surrogate.geometry, collision_detection, null, iterate_layers_VandC.z, min); // TODO: Check if Z matters
+                                            
+                                            post_collision_area = 0;
+                                            pre_collision_area = 0;
+                                            try_book_polygons_list.forEach(function(top_poly) {
+                                                pre_collision_area += Math.abs(top_poly.area());
+                                            });
+                                            collision_detection.forEach(function(top_poly) {
+                                                post_collision_area += Math.abs(top_poly.area());
+                                            });
+                                            
+                                            if (Math.abs(post_collision_area - pre_collision_area) > 0.00001) {
+                                                if ((slice_height_range.bottom_height + surrogate_settings.min_squish_height) < (try_book.minHeight + try_z)) {
+                                                    collision = true;
+                                                    console.log(Math.abs(post_collision_area - pre_collision_area));
+                                                    continue;
+                                                }
+                                                else {
+                                                    try_book.height = iterate_layers_VandC.down.z; // TODO: Test whether this is the best previous height
+                                                    overextended = true;
+                                                    continue;
+                                                }
+                                                //console.log({collision_true: post_collision_area - pre_collision_area});
                                             }
-                                            else {
-                                                try_book.height = iterate_layers_VandC.down.z; // TODO: Test whether this is the best previous height
-                                                overextended = true;
-                                                continue;
-                                            }
-                                            //console.log({collision_true: post_collision_area - pre_collision_area});
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        // Out of range of surrogate, nothing left to do
-                        if (check_collisions === false && calculating_volume === false) {
+                            // Out of range of surrogate, nothing left to do
+                            if (check_collisions === false && calculating_volume === false) {
+                                repetition_counter++;
+                                break;
+                            }
+
+                            // Step up
+                            iterate_layers_VandC = iterate_layers_VandC.up;
+                            // insertion_layer_number_guess = iterate_layers_VandC.index;
+                        }
+                        if (collision) {
+                            good = false;
                             repetition_counter++;
-                            break;
+                            continue;
                         }
-
-                        // Step up
-                        iterate_layers_VandC = iterate_layers_VandC.up;
-                        // insertion_layer_number_guess = iterate_layers_VandC.index;
-                    }
-                    if (collision) {
-                        good = false;
-                        repetition_counter++;
-                        continue;
                     }
 
                 }
+                if (collision_and_volumes[0] === true) {
+                    good = false;
+                    repetition_counter++;
+                    continue;
+                }
+                old_volume = collision_and_volumes[1];
+                new_volume = collision_and_volumes[2];
                 delta_volume = old_volume - new_volume;
+
+                // console.log({old_volume:old_volume});
+                // console.log({new_volume:new_volume});
                 // console.log({delta_volume:delta_volume});
 
 
@@ -2663,7 +3799,7 @@
                 }
                 let end_height = try_z + try_book.height;
                 let candidate = {
-                    geometry:test_book_rectangle_list, 
+                    geometry:try_book_polygons_list, 
                     book:try_book, starting_height:try_z, 
                     end_height:end_height, 
                     down_surrogate:lower_book, 
@@ -2696,7 +3832,7 @@
                 // If it is just as good --> choose the bigger one
                 else if (good === true && delta_volume === best_delta_volume && delta_volume > 0) {
                     // Check if the new surrogate is bigger
-                    if (!(Object.keys(place_one_book).length === 0) && place_one_book.geometry[0].area > test_book_rectangle_list[0].area) { // LWW TODO: Adjust for more complicated geometry
+                    if (!(Object.keys(place_one_book).length === 0) && place_one_book.geometry[0].area > try_book_polygons_list[0].area) { // LWW TODO: Adjust for more complicated geometry
                         console.log({Notification:"A surrogate replaced the same amount of support, but was bigger"});
                         place_one_book = candidate;
                     }
@@ -2729,326 +3865,328 @@
         up = bottom_slice;
         let top_slice = bottom_slice;
         // For all slices
-        while (up) {
+        if (surrogate_number_goal > 0) {
+            while (up) {
 
-            
+                
 
-            // If supports exist
-            if (up.supports && up.supports.length > 0) {
+                // If supports exist
+                if (up.supports && up.supports.length > 0) {
 
-                if (!up.tops[0].fill_sparse) up.tops[0].fill_sparse = [];
-                let rand_supp = up.supports[Math.floor(Math.random() * up.supports.length)];
-                up.tops[0].fill_sparse.push(rand_supp);
+                    if (!up.tops[0].fill_sparse) up.tops[0].fill_sparse = [];
+                    let rand_supp = up.supports[Math.floor(Math.random() * up.supports.length)];
+                    up.tops[0].fill_sparse.push(rand_supp);
 
 
-                // For every book, surrogate the support
-                //var surrogate;
-                //for (surrogate in books_placed) {
-                for (let idx = 0; idx < books_placed.length; idx++) {
-                    let surrogate = books_placed[idx];
-                    
-                    if (surrogate.insertion_data.insertion_case === "Insert_new_support_layer") {
-                        let up_height_range = get_height_range(up);
-                        if (up_height_range.bottom_height < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
+                    // For every book, surrogate the support
+                    //var surrogate;
+                    //for (surrogate in books_placed) {
+                    for (let idx = 0; idx < books_placed.length; idx++) {
+                        let surrogate = books_placed[idx];
+                        
+                        if (surrogate.insertion_data.insertion_case === "Insert_new_support_layer") {
+                            let up_height_range = get_height_range(up);
+                            if (up_height_range.bottom_height < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
+                                let surrogated_supports = [];
+                                POLY.subtract(up.supports, surrogate.geometry, surrogated_supports, null, up.z, min); // TODO: Collect book polygons and do it only once
+                                up.supports = surrogated_supports;
+                            }
+                        }
+                        // If the book is at this height
+                        else if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
                             let surrogated_supports = [];
                             POLY.subtract(up.supports, surrogate.geometry, surrogated_supports, null, up.z, min); // TODO: Collect book polygons and do it only once
                             up.supports = surrogated_supports;
                         }
                     }
+                } else {
+                    up.supports = [];
+                }
+
+                // After surrogating all supports, draw their outlines
+                for (let draw_outline_idx = 0; draw_outline_idx < books_placed.length; draw_outline_idx++) {
+                    let surrogate = books_placed[draw_outline_idx];
                     // If the book is at this height
-                    else if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
-                        let surrogated_supports = [];
-                        POLY.subtract(up.supports, surrogate.geometry, surrogated_supports, null, up.z, min); // TODO: Collect book polygons and do it only once
-                        up.supports = surrogated_supports;
-                    }
-                }
-            } else {
-                up.supports = [];
-            }
+                    if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
+                        if (surrogate.outlines_drawn < 5) {
+                            // make surrogate bigger
+                            // let surrogate_enlarged_more = [];
+                            // let surrogate_enlarged = [];
+                            // surrogate_enlarged_more = POLY.expand(surrogate.geometry, 0.4 + surrogate_enlargement, up.z, surrogate_enlarged_more, 1); // For a less tight fit
+                            // surrogate_enlarged = POLY.expand(surrogate.geometry, surrogate_enlargement, up.z, surrogate_enlarged, 1); // For a less tight fit
+                            let surrogate_enlarged = [];
+                            let surrogate_double_enlarged = [];
+                            surrogate_enlarged = POLY.expand(surrogate.geometry, 0.4, up.z, surrogate_enlarged, 1);
+                            surrogate_double_enlarged = POLY.expand(surrogate_enlarged, 0.4, up.z, surrogate_double_enlarged, 1); 
 
-            // After surrogating all supports, draw their outlines
-            for (let draw_outline_idx = 0; draw_outline_idx < books_placed.length; draw_outline_idx++) {
-                let surrogate = books_placed[draw_outline_idx];
-                // If the book is at this height
-                if (up.z < (surrogate.book.height + surrogate.starting_height) && up.z >= surrogate.starting_height) {
-                    if (surrogate.outlines_drawn < 5) {
-                        // make surrogate bigger
-                        // let surrogate_enlarged_more = [];
-                        // let surrogate_enlarged = [];
-                        // surrogate_enlarged_more = POLY.expand(surrogate.geometry, 0.4 + surrogate_enlargement, up.z, surrogate_enlarged_more, 1); // For a less tight fit
-                        // surrogate_enlarged = POLY.expand(surrogate.geometry, surrogate_enlargement, up.z, surrogate_enlarged, 1); // For a less tight fit
-                        let surrogate_enlarged = [];
-                        let surrogate_double_enlarged = [];
-                        surrogate_enlarged = POLY.expand(surrogate.geometry, 0.4, up.z, surrogate_enlarged, 1);
-                        surrogate_double_enlarged = POLY.expand(surrogate_enlarged, 0.4, up.z, surrogate_double_enlarged, 1); 
+                            
+                            // subtract actual surrogate area to get only the outline
+                            let surrogate_outline_area_only = [];
+                            // POLY.subtract(surrogate_enlarged_more, surrogate_enlarged, surrogate_outline_area_only, null, up.z, min);
+                            POLY.subtract(surrogate_enlarged, surrogate.geometry, surrogate_outline_area_only, null, up.z, min);
 
-                        
-                        // subtract actual surrogate area to get only the outline
-                        let surrogate_outline_area_only = [];
-                        // POLY.subtract(surrogate_enlarged_more, surrogate_enlarged, surrogate_outline_area_only, null, up.z, min);
-                        POLY.subtract(surrogate_enlarged, surrogate.geometry, surrogate_outline_area_only, null, up.z, min);
+                            // surrogate_outline_area_only[0].points.forEach(function (point) {
+                            //     point.z = point.z + 3.667686;
+                            // });
 
-                        // surrogate_outline_area_only[0].points.forEach(function (point) {
-                        //     point.z = point.z + 3.667686;
-                        // });
+                            // console.log({next_layer:up.up});
+                            // Add outline to supports (will still be a double outline for now)
+                            if (false) {
+                            //if (!first_placed) { // Switch mode for first outline
+                                up.tops[0].shells.push(surrogate_outline_area_only[0]);
+                                first_placed = true;
+                            } else {
+                                //up.supports.push(surrogate_outline_area_only[0]);
+                                if (!(up.tops[0].fill_sparse)) {
+                                    up.tops[0].fill_sparse = [];
+                                }
+                                surrogate_outline_area_only[0].points.push(surrogate_outline_area_only[0].points[0]);
+                                console.log({points_poly:surrogate_outline_area_only[0]});
+                                up.tops[0].fill_sparse.push(surrogate_outline_area_only[0]);
+                                let supp_minus_outlines = [];
 
-                        // console.log({next_layer:up.up});
-                        // Add outline to supports (will still be a double outline for now)
-                        if (false) {
-                        //if (!first_placed) { // Switch mode for first outline
-                            up.tops[0].shells.push(surrogate_outline_area_only[0]);
-                            first_placed = true;
-                        } else {
-                            //up.supports.push(surrogate_outline_area_only[0]);
-                            if (!(up.tops[0].fill_sparse)) {
-                                up.tops[0].fill_sparse = [];
+                                // Prevent overlap of outlines and support // LWW TODO: Try adding to support and combine the two
+                                up.supports = POLY.subtract(up.supports, surrogate_double_enlarged, supp_minus_outlines, null, up.z, min);
                             }
-                            surrogate_outline_area_only[0].points.push(surrogate_outline_area_only[0].points[0]);
-                            console.log({points_poly:surrogate_outline_area_only[0]});
-                            up.tops[0].fill_sparse.push(surrogate_outline_area_only[0]);
-                            let supp_minus_outlines = [];
+                            
+                            // console.log({surrogate_outline_area_only:surrogate_outline_area_only});
 
-                            // Prevent overlap of outlines and support // LWW TODO: Try adding to support and combine the two
-                            up.supports = POLY.subtract(up.supports, surrogate_double_enlarged, supp_minus_outlines, null, up.z, min);
+                            //console.log({up_support:up.supports});
+                            //up.supports.push(surrogate.geometry[0]);
+                            //console.log({geometry:surrogate.geometry});
+                            surrogate.outlines_drawn++;
                         }
-                        
-                        // console.log({surrogate_outline_area_only:surrogate_outline_area_only});
 
-                        //console.log({up_support:up.supports});
-                        //up.supports.push(surrogate.geometry[0]);
-                        //console.log({geometry:surrogate.geometry});
-                        surrogate.outlines_drawn++;
-                    }
+                        // Trying to add outlines directly
+                        if (false) { //(surrogate.outlines_drawn >= 2 && surrogate.outlines_drawn <= 3) {
+                            let surrogate_outline = [];
+                            let surrogate_outline2 = [];
+                            surrogate_outline = POLY.expand(surrogate.geometry, 0.1, up.z, surrogate_outline, 1);
 
-                    // Trying to add outlines directly
-                    if (false) { //(surrogate.outlines_drawn >= 2 && surrogate.outlines_drawn <= 3) {
-                        let surrogate_outline = [];
-                        let surrogate_outline2 = [];
-                        surrogate_outline = POLY.expand(surrogate.geometry, 0.1, up.z, surrogate_outline, 1);
+                            let surrogate_outline_area_only = [];
+                            POLY.subtract(surrogate_outline, surrogate.geometry, surrogate_outline_area_only, null, slice.z, min);
+                            //POLY.expand(surrogate_outline, -0.2, up.z, surrogate_outline2);
+                            //surrogate_outline[0].setOpen(true);
+                            //surrogate_outline[0].points = surrogate_outline[0].points.slice(0, 3);
+                            console.log({surrogate_outline_area_only:surrogate_outline_area_only});
+                            //surrogate_outline[0].area2 = 0;
+                            
+                            //console.log({surrogate_outline2:surrogate_outline2});
+                            up.supports.push(surrogate_outline_area_only[0]);
+                            surrogate.outlines_drawn++;
+                            let up_top_zero = up.tops[0];
+                            if (!up_top_zero.fill_sparse) up_top_zero.fill_sparse = [];
+                            //up_top_zero.fill_sparse.appendAll(surrogate_outline);
 
-                        let surrogate_outline_area_only = [];
-                        POLY.subtract(surrogate_outline, surrogate.geometry, surrogate_outline_area_only, null, slice.z, min);
-                        //POLY.expand(surrogate_outline, -0.2, up.z, surrogate_outline2);
-                        //surrogate_outline[0].setOpen(true);
-                        //surrogate_outline[0].points = surrogate_outline[0].points.slice(0, 3);
-                        console.log({surrogate_outline_area_only:surrogate_outline_area_only});
-                        //surrogate_outline[0].area2 = 0;
-                        
-                        //console.log({surrogate_outline2:surrogate_outline2});
-                        up.supports.push(surrogate_outline_area_only[0]);
-                        surrogate.outlines_drawn++;
-                        let up_top_zero = up.tops[0];
-                        if (!up_top_zero.fill_sparse) up_top_zero.fill_sparse = [];
-                        //up_top_zero.fill_sparse.appendAll(surrogate_outline);
-
+                        }
                     }
                 }
-            }
-            top_slice = up;
-            up = up.up; 
-        } // top_slice should now be at the top
+                top_slice = up;
+                up = up.up; 
+            } // top_slice should now be at the top
+        
 
-        // LWW TODO: Remove this warning check if insertion layers are too close
-        let iterating_down = top_slice;
-        books_placed.sort((a, b) => (a.insertion_data.new_layer_index > b.insertion_data.new_layer_index) ? 1 : -1);
-        let last_surrogate;
-        books_placed.forEach(function(surrogate) {
-            if (last_surrogate && Math.abs(surrogate.insertion_data.new_layer_index - last_surrogate.insertion_data.new_layer_index) === 1) {
-                console.log({WARNING:"Surrogates are on consecutive layers!"});
-            }
-            last_surrogate = surrogate;
-        });
-
-
-        // Adjust layer heights and slide in new layers at surrogate top ends
-        while (iterating_down) {
-            let surrogates_at_this_index = [];
-            let all_other_surrogates = [];
+            // LWW TODO: Remove this warning check if insertion layers are too close
+            let iterating_down = top_slice;
+            books_placed.sort((a, b) => (a.insertion_data.new_layer_index > b.insertion_data.new_layer_index) ? 1 : -1);
+            let last_surrogate;
             books_placed.forEach(function(surrogate) {
-                if (surrogate.insertion_data.new_layer_index === iterating_down.index) {
-                    surrogates_at_this_index.push(surrogate);
+                if (last_surrogate && Math.abs(surrogate.insertion_data.new_layer_index - last_surrogate.insertion_data.new_layer_index) === 1) {
+                    console.log({WARNING:"Surrogates are on consecutive layers!"});
                 }
-                else {
-                    all_other_surrogates.push(surrogate);
-                }
+                last_surrogate = surrogate;
             });
-            
-            if (surrogates_at_this_index.length >= 1) {
-                // Add pause layer at index of already printed layer
-                addPauseLayer(surrogates_at_this_index[0].insertion_data.printed_layer_index, settings);
 
-                console.log({surrogates_at_this_index:surrogates_at_this_index});
-                let new_layer_height_range = get_height_range(iterating_down);
-                let printed_layer_height_range = get_height_range(iterating_down.down);
-                let new_layer_new_height_values;
-                let printed_layer_new_height_values;
-                let change_slices = true;
 
-                // Special case: Multiple surrogates on one slice
-                if (surrogates_at_this_index.length > 1) {
-                    console.log({Status:"Multiple surrogates."});
-                    
-                    let only_simple_case = true;
-                    let lowest_height = Number.POSITIVE_INFINITY;
-                    let highest_height = -1;
-                    // Check which cases are present
-                    surrogates_at_this_index.forEach(function(surrogate) {
-                        if (highest_height < surrogate.insertion_data.max_height) highest_height = surrogate.insertion_data.max_height;
-                        if (lowest_height > surrogate.insertion_data.min_height) lowest_height = surrogate.insertion_data.min_height;
-                        if (surrogate.insertion_data.insertion_case != "extend_printed_layer") only_simple_case = false;         
-                    });
-
-                    if (only_simple_case) {
-                        // set bot of new layer and top of printed layer to found max height == Extend both up
-                        new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, highest_height);
-                        printed_layer_new_height_values = get_slice_height_values(highest_height, printed_layer_height_range.bottom_height);
-                        
+            // Adjust layer heights and slide in new layers at surrogate top ends
+            while (iterating_down) {
+                let surrogates_at_this_index = [];
+                let all_other_surrogates = [];
+                books_placed.forEach(function(surrogate) {
+                    if (surrogate.insertion_data.new_layer_index === iterating_down.index) {
+                        surrogates_at_this_index.push(surrogate);
                     }
                     else {
-                        // set bot of new layer and top of printed layer to found min height (extrude down a lot) // LWW TODO: make sure z is high enough for all surrogates, droop as much as necessary
-                        new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, lowest_height);
-                        printed_layer_new_height_values = get_slice_height_values(lowest_height, printed_layer_height_range.bottom_height);
+                        all_other_surrogates.push(surrogate);
                     }
-                    
-                }
-                // Simple cases: One surrogate on the slice
-                else if (surrogates_at_this_index.length === 1) {
-                    if (surrogates_at_this_index[0].insertion_data.insertion_case === "Insert_new_support_layer") {
-                        change_slices = false;
-                        let original_supports = surrogates_at_this_index[0].insertion_data.original_supports;
-                        let only_support_above_this_surrogate = [];
-                        let only_support_above_this_surrogate_2 = [];
-                        // console.log({slideInSlice:surrogates_at_this_index[0]});
-                        // console.log({iterating_down:iterating_down});
-                        // console.log({iterating_down_DOWN:iterating_down.down});
+                });
+                
+                if (surrogates_at_this_index.length >= 1) {
+                    // Add pause layer at index of already printed layer
+                    addPauseLayer(surrogates_at_this_index[0].insertion_data.printed_layer_index, settings);
+
+                    console.log({surrogates_at_this_index:surrogates_at_this_index});
+                    let new_layer_height_range = get_height_range(iterating_down);
+                    let printed_layer_height_range = get_height_range(iterating_down.down);
+                    let new_layer_new_height_values;
+                    let printed_layer_new_height_values;
+                    let change_slices = true;
+
+                    // Special case: Multiple surrogates on one slice
+                    if (surrogates_at_this_index.length > 1) {
+                        console.log({Status:"Multiple surrogates."});
                         
-                        // Get only the diff of supports (after surrogating) from the printed slice
-                        if (false) {
-                            original_supports.forEach(function(original_supp) {
-                                console.log({original_supp:original_supp});
-                                let support_diff = original_supp;
-                                if (iterating_down.down.supports) {
-                                    iterating_down.down.supports.forEach(function(supp) {
-                                        let full_arr = support_diff;
-                                        let subtract_arr = supp;
-                                        let out_arr = [];
-                                        support_diff = POLY.subtract(full_arr, subtract_arr, out_arr, null, new_layer_height_range.bottom_height, min);
-                                    });
-                                }
-                                // support_diff.forEach(function(diff) {
-                                //     only_support_above_this_surrogate.push(diff);
-                                // });
-                                only_support_above_this_surrogate.push(support_diff);
+                        let only_simple_case = true;
+                        let lowest_height = Number.POSITIVE_INFINITY;
+                        let highest_height = -1;
+                        // Check which cases are present
+                        surrogates_at_this_index.forEach(function(surrogate) {
+                            if (highest_height < surrogate.insertion_data.max_height) highest_height = surrogate.insertion_data.max_height;
+                            if (lowest_height > surrogate.insertion_data.min_height) lowest_height = surrogate.insertion_data.min_height;
+                            if (surrogate.insertion_data.insertion_case != "extend_printed_layer") only_simple_case = false;         
+                        });
+
+                        if (only_simple_case) {
+                            // set bot of new layer and top of printed layer to found max height == Extend both up
+                            new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, highest_height);
+                            printed_layer_new_height_values = get_slice_height_values(highest_height, printed_layer_height_range.bottom_height);
+                            
+                        }
+                        else {
+                            // set bot of new layer and top of printed layer to found min height (extrude down a lot) // LWW TODO: make sure z is high enough for all surrogates, droop as much as necessary
+                            new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, lowest_height);
+                            printed_layer_new_height_values = get_slice_height_values(lowest_height, printed_layer_height_range.bottom_height);
+                        }
+                        
+                    }
+                    // Simple cases: One surrogate on the slice
+                    else if (surrogates_at_this_index.length === 1) {
+                        if (surrogates_at_this_index[0].insertion_data.insertion_case === "Insert_new_support_layer") {
+                            change_slices = false;
+                            let original_supports = surrogates_at_this_index[0].insertion_data.original_supports;
+                            let only_support_above_this_surrogate = [];
+                            let only_support_above_this_surrogate_2 = [];
+                            // console.log({slideInSlice:surrogates_at_this_index[0]});
+                            // console.log({iterating_down:iterating_down});
+                            // console.log({iterating_down_DOWN:iterating_down.down});
+                            
+                            // Get only the diff of supports (after surrogating) from the printed slice
+                            if (false) {
+                                original_supports.forEach(function(original_supp) {
+                                    console.log({original_supp:original_supp});
+                                    let support_diff = original_supp;
+                                    if (iterating_down.down.supports) {
+                                        iterating_down.down.supports.forEach(function(supp) {
+                                            let full_arr = support_diff;
+                                            let subtract_arr = supp;
+                                            let out_arr = [];
+                                            support_diff = POLY.subtract(full_arr, subtract_arr, out_arr, null, new_layer_height_range.bottom_height, min);
+                                        });
+                                    }
+                                    // support_diff.forEach(function(diff) {
+                                    //     only_support_above_this_surrogate.push(diff);
+                                    // });
+                                    only_support_above_this_surrogate.push(support_diff);
+                                });
+                            }
+
+
+                            // Support on the new slide-in slice are: 
+                            //      - The original supports MINUS
+                            //          - remaining supports
+                            //          - other surrogate geometriues
+                            // First collect all geometries that should be removed from original supports 
+                            let collect_all_polygons_removed_from_support = [];
+                            let collect_all_surrogate_geometries_removed_from_support = [];
+
+                            // There will be overlap unless we expand the remaining supports
+                            let support_enlarged = []
+                            support_enlarged = POLY.expand(iterating_down.down.supports, 0.4, iterating_down.down.z, support_enlarged, 1);
+                            support_enlarged.forEach(function(supp) {
+                                collect_all_polygons_removed_from_support.push(supp);
                             });
+
+
+                            all_other_surrogates.forEach(function(surrogate) {
+                                collect_all_surrogate_geometries_removed_from_support = collect_all_surrogate_geometries_removed_from_support.concat(getSurrogateGeometryAtIndexHeight(surrogate, iterating_down.down.z));
+                                // console.log({other_surrogate_geometries:getSurrogateGeometryAtIndexHeight(surrogate, iterating_down.down.z)});
+                            });
+
+
+                            console.log({collected_polygons:collect_all_polygons_removed_from_support});
+                            console.log({collected_surrogate_geometries:collect_all_surrogate_geometries_removed_from_support});
+                            // Get only the support on top of the current surrogate by subtracting original supports minus remaining supports/surrogates
+                            // Must do this in two separate steps, otherwise the subtract function adds a new polygon where support/surrogate outlines meet
+                            if (collect_all_polygons_removed_from_support.length > 0) {
+                                POLY.subtract(original_supports, collect_all_polygons_removed_from_support, only_support_above_this_surrogate_2, null, new_layer_height_range.bottom_height, min);
+                            } else {
+                                only_support_above_this_surrogate_2 = original_supports;
+                            }
+                            if (only_support_above_this_surrogate_2.length > 0) {
+                                POLY.subtract(only_support_above_this_surrogate_2, collect_all_surrogate_geometries_removed_from_support, only_support_above_this_surrogate, null, new_layer_height_range.bottom_height, min);
+                            } else {
+                                only_support_above_this_surrogate = only_support_above_this_surrogate_2;
+                            }
+
+
+                            // console.log({original_supports:original_supports});
+                            // console.log({down_supports:iterating_down.down.supports});
+                            // console.log({only_support_above_this_surrogate:only_support_above_this_surrogate});
+                            
+                            // Testing
+                            // iterating_down.down.supports.forEach(function(supp) {
+                            //     only_support_above_this_surrogate.push(supp);
+                            // });
+
+                            let slide_in_slice_height_values = get_slice_height_values(new_layer_height_range.bottom_height + surrogate_settings.minimum_clearance_height, surrogates_at_this_index[0].end_height, false);
+                            let slide_in_slice = newSlice(slide_in_slice_height_values.z, view);
+                            slide_in_slice.height = slide_in_slice_height_values.height;
+                            slide_in_slice.widget = iterating_down.widget; 
+                            slide_in_slice.extruder = iterating_down.extruder; 
+                            slide_in_slice.isSparseFill = iterating_down.isSparseFill;
+                            slide_in_slice.isSolidLayer = iterating_down.isSolidLayer;
+                            slide_in_slice.offsets = iterating_down.offsets;
+                            //slide_in_slice.finger = iterating_down.finger;
+                            slide_in_slice.supports = only_support_above_this_surrogate;
+
+                            slide_in_slice.down = iterating_down.down;
+                            slide_in_slice.up = iterating_down;
+                            iterating_down.down.up = slide_in_slice;
+                            iterating_down.down = slide_in_slice;
+                            slide_in_slice.index = iterating_down.index;
+
+                            // Adjust all slice indexes above
+                            iterating_down.index = iterating_down.index + 1;
+                            let correcting_chain = iterating_down;
+                            while (correcting_chain.up) {
+                                correcting_chain = correcting_chain.up;
+                                correcting_chain.index = correcting_chain.index + 1;
+                            }
+
+                            console.log({slide_in_slice:slide_in_slice});
+                            console.log({iterating_down:iterating_down.index});
+                            console.log({Case:"Insert_new_support_layer"})
+
+                            // Now skip the newly added slice
+                            iterating_down = iterating_down.down;
+                        } 
+                        else if (surrogates_at_this_index[0].insertion_data.insertion_case === "extend_printed_layer") {
+                            let highest_height = surrogates_at_this_index[0].insertion_data.max_height;
+                            new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, highest_height);
+                            printed_layer_new_height_values = get_slice_height_values(highest_height, printed_layer_height_range.bottom_height);
+                            console.log({iterating_down:iterating_down.index});
+                            console.log({Case:"extend_printed_layer"})
                         }
-
-
-                        // Support on the new slide-in slice are: 
-                        //      - The original supports MINUS
-                        //          - remaining supports
-                        //          - other surrogate geometriues
-                        // First collect all geometries that should be removed from original supports 
-                        let collect_all_polygons_removed_from_support = [];
-                        let collect_all_surrogate_geometries_removed_from_support = [];
-
-                        // There will be overlap unless we expand the remaining supports
-                        let support_enlarged = []
-                        support_enlarged = POLY.expand(iterating_down.down.supports, 0.4, iterating_down.down.z, support_enlarged, 1);
-                        support_enlarged.forEach(function(supp) {
-                            collect_all_polygons_removed_from_support.push(supp);
-                        });
-
-
-                        all_other_surrogates.forEach(function(surrogate) {
-                            collect_all_surrogate_geometries_removed_from_support = collect_all_surrogate_geometries_removed_from_support.concat(getSurrogateGeometryAtIndexHeight(surrogate, iterating_down.down.z));
-                            // console.log({other_surrogate_geometries:getSurrogateGeometryAtIndexHeight(surrogate, iterating_down.down.z)});
-                        });
-
-
-                        console.log({collected_polygons:collect_all_polygons_removed_from_support});
-                        console.log({collected_surrogate_geometries:collect_all_surrogate_geometries_removed_from_support});
-                        // Get only the support on top of the current surrogate by subtracting original supports minus remaining supports/surrogates
-                        // Must do this in two separate steps, otherwise the subtract function adds a new polygon where support/surrogate outlines meet
-                        if (collect_all_polygons_removed_from_support.length > 0) {
-                            POLY.subtract(original_supports, collect_all_polygons_removed_from_support, only_support_above_this_surrogate_2, null, new_layer_height_range.bottom_height, min);
-                        } else {
-                            only_support_above_this_surrogate_2 = original_supports;
+                        else if (surrogates_at_this_index[0].insertion_data.insertion_case === "extend_new_layer") {
+                            let lowest_height = surrogates_at_this_index[0].insertion_data.min_height;
+                            new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, lowest_height);
+                            printed_layer_new_height_values = get_slice_height_values(lowest_height, printed_layer_height_range.bottom_height);
+                            console.log({iterating_down:iterating_down.index});
+                            console.log({Case:"extend_new_layer"})
                         }
-                        if (only_support_above_this_surrogate_2.length > 0) {
-                            POLY.subtract(only_support_above_this_surrogate_2, collect_all_surrogate_geometries_removed_from_support, only_support_above_this_surrogate, null, new_layer_height_range.bottom_height, min);
-                        } else {
-                            only_support_above_this_surrogate = only_support_above_this_surrogate_2;
-                        }
-
-
-                        // console.log({original_supports:original_supports});
-                        // console.log({down_supports:iterating_down.down.supports});
-                        // console.log({only_support_above_this_surrogate:only_support_above_this_surrogate});
-                        
-                        // Testing
-                        // iterating_down.down.supports.forEach(function(supp) {
-                        //     only_support_above_this_surrogate.push(supp);
-                        // });
-
-                        let slide_in_slice_height_values = get_slice_height_values(new_layer_height_range.bottom_height + surrogate_settings.minimum_clearance_height, surrogates_at_this_index[0].end_height, false);
-                        let slide_in_slice = newSlice(slide_in_slice_height_values.z, view);
-                        slide_in_slice.height = slide_in_slice_height_values.height;
-                        slide_in_slice.widget = iterating_down.widget; 
-                        slide_in_slice.extruder = iterating_down.extruder; 
-                        slide_in_slice.isSparseFill = iterating_down.isSparseFill;
-                        slide_in_slice.isSolidLayer = iterating_down.isSolidLayer;
-                        slide_in_slice.offsets = iterating_down.offsets;
-                        //slide_in_slice.finger = iterating_down.finger;
-                        slide_in_slice.supports = only_support_above_this_surrogate;
-
-                        slide_in_slice.down = iterating_down.down;
-                        slide_in_slice.up = iterating_down;
-                        iterating_down.down.up = slide_in_slice;
-                        iterating_down.down = slide_in_slice;
-                        slide_in_slice.index = iterating_down.index;
-
-                        // Adjust all slice indexes above
-                        iterating_down.index = iterating_down.index + 1;
-                        let correcting_chain = iterating_down;
-                        while (correcting_chain.up) {
-                            correcting_chain = correcting_chain.up;
-                            correcting_chain.index = correcting_chain.index + 1;
-                        }
-
-                        console.log({slide_in_slice:slide_in_slice});
-                        console.log({iterating_down:iterating_down.index});
-                        console.log({Case:"Insert_new_support_layer"})
-
-                        // Now skip the newly added slice
-                        iterating_down = iterating_down.down;
-                    } 
-                    else if (surrogates_at_this_index[0].insertion_data.insertion_case === "extend_printed_layer") {
-                        let highest_height = surrogates_at_this_index[0].insertion_data.max_height;
-                        new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, highest_height);
-                        printed_layer_new_height_values = get_slice_height_values(highest_height, printed_layer_height_range.bottom_height);
-                        console.log({iterating_down:iterating_down.index});
-                        console.log({Case:"extend_printed_layer"})
                     }
-                    else if (surrogates_at_this_index[0].insertion_data.insertion_case === "extend_new_layer") {
-                        let lowest_height = surrogates_at_this_index[0].insertion_data.min_height;
-                        new_layer_new_height_values = get_slice_height_values(new_layer_height_range.top_height, lowest_height);
-                        printed_layer_new_height_values = get_slice_height_values(lowest_height, printed_layer_height_range.bottom_height);
-                        console.log({iterating_down:iterating_down.index});
-                        console.log({Case:"extend_new_layer"})
+                    if (change_slices) {
+                        iterating_down.z = new_layer_new_height_values.z;
+                        iterating_down.height = new_layer_new_height_values.height;
+                        iterating_down.down.z = printed_layer_new_height_values.z;
+                        iterating_down.down.height = printed_layer_new_height_values.height;
                     }
                 }
-                if (change_slices) {
-                    iterating_down.z = new_layer_new_height_values.z;
-                    iterating_down.height = new_layer_new_height_values.height;
-                    iterating_down.down.z = printed_layer_new_height_values.z;
-                    iterating_down.down.height = printed_layer_new_height_values.height;
-                }
+
+                iterating_down = iterating_down.down;
+                
             }
-
-            iterating_down = iterating_down.down;
-            
         }
-
 
         // Old way of determining surrogates on a layer
         if (false) {

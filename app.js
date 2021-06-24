@@ -317,6 +317,8 @@ const script = {
         "geo/polygons",
         "geo/gyroid",
         "moto/pack",
+        "kiri/parallelenv",
+        "kiri/pso",
         "kiri/slice",
         "kiri/slicer",
         "kiri/slicer2",

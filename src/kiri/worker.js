@@ -29,6 +29,13 @@ KIRI.worker = {
 
     cache: wcache,
 
+    surrogate: function(data, send, direct) {
+        console.log({worker_messsage:"surrogating"});
+        console.log({worker_data:data});
+        console.log({worker_direct:direct});
+        send.done(Math.random()*1000);
+    },
+
     decimate: function(data, send) {
         let { vertices, options } = data;
         vertices = new Float32Array(vertices),
@@ -548,7 +555,7 @@ KIRI.worker = {
     }
 };
 
-self.onmessage = function(e) {
+self.onmessage = function(e, zerocopy) {
     let time_recv = time(),
         msg = e.data,
         run = dispatch[msg.task],
@@ -585,7 +592,7 @@ self.onmessage = function(e) {
 
     if (run) {
         let time_xfer = (time_recv - msg.time),
-            output = run(msg.data, send),
+            output = run(msg.data, send, zerocopy),
             time_send = time(),
             time_proc = time_send - time_recv;
 
