@@ -1315,6 +1315,13 @@ var gs_base_polygon = exports;
         return poly;
     }
 
+    /**
+     * Setter method for polygon.open
+     */
+    PRO.setOpen = function(state) {
+        this.open = state;
+    };
+
     /** ******************************************************************
      * Connect to base and Helpers
      ******************************************************************* */

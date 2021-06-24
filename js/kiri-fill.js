@@ -20,6 +20,7 @@ var gs_kiri_fill = exports;
             gyroid: fillGyroid,
             triangle: fillTriangle,
             linear: fillLinear,
+            bubbles2: fillBubbles2,
             bubbles: fillBubbles
         },
         CACHE = self.kiri.fill_fixed = {
@@ -232,6 +233,45 @@ var gs_kiri_fill = exports;
         let brad = bind < zrep ? Math.max(minr,(rad * Math.sin(((bind + 1) / zrep) * Math.PI))) : minr;
         let sind = (api.zIndex() + (zrep + zpad)/2) % (zrep + zpad); // index into pattern
         let srad = sind < zrep ? Math.max(minr,(rad * Math.sin(((sind + 1) / (zrep + 0)) * Math.PI))) : minr;
+        for (let x=min.x-size; x<max.x+size; x += size) {
+            let eoy = 0;
+            for (let y=min.y-size; y<max.y+size; y += size) {
+                let xo = (eoy++ % 2 === 0) ? (size / 2) : 0;
+                // primary pattern
+                self.base
+                    .newPolygon()
+                    .centerCircle({x:x+xo, y:y*0.85}, brad, 20, true)
+                    .forEachPoint(p => {
+                        api.emit(p.x, p.y);
+                    }, true);
+                api.newline();
+                // alternate pattern
+                self.base
+                    .newPolygon()
+                    .centerCircle({x:x+xo, y:y*0.85+(size/1.75)}, srad, 20, true)
+                    .forEachPoint(p => {
+                        api.emit(p.x, p.y);
+                    }, true);
+                api.newline();
+            }
+        }
+    }
+
+    function fillBubbles2(api) {
+        let {min, max} = api.bounds();
+        let slice = api.slice(); // slice object (for adding solids)
+        let height = api.zHeight(); // layer height
+        let offset = api.lineWidth() / 2; // offset size by nozzle width
+        let size = 3 / api.density(); // circle diameter from density
+        let rad = size / 2 - offset; // max circle radius
+        let minr = offset + (2 - api.density() * 2) * offset;
+        let zrep = size / height; // # layers to repeat pattern
+        let zpad = zrep * 0.3; // # pad layers between pattern
+        let bind = api.zIndex() % (zrep + zpad); // index into pattern
+        let brad = bind < zrep ? Math.max(minr,(rad * Math.sin(((bind + 1) / zrep) * Math.PI))) : minr;
+        let sind = (api.zIndex() + (zrep + zpad)/2) % (zrep + zpad); // index into pattern
+        let srad = sind < zrep ? Math.max(minr,(rad * Math.sin(((sind + 1) / (zrep + 0)) * Math.PI))) : minr;
+        console.log("Bubble infill 2")
         for (let x=min.x-size; x<max.x+size; x += size) {
             let eoy = 0;
             for (let y=min.y-size; y<max.y+size; y += size) {

@@ -28,6 +28,8 @@ self.kiri.copyright = exports.COPYRIGHT;
         ODB     = KIRI.odb = new MOTO.Storage(SETUP.d ? SETUP.d[0] : 'kiri'),
         SPACE   = KIRI.space = MOTO.Space,
         WIDGETS = KIRI.widgets = [],
+        SCRAPS  = KIRI.scraps = [],
+        SCRAPSMOVE = KIRI.scrapsMove = [{x: 0, y: 0, z: 0}], // LWW TODO: Use this as a list instead of just [0] for filling multiple models with scrap 
         CATALOG = KIRI.catalog = KIRI.openCatalog(ODB,autoDecimate),
         STATS   = new Stats(SDB),
         SEED    = 'kiri-seed',
@@ -60,7 +62,9 @@ self.kiri.copyright = exports.COPYRIGHT;
         topZ = 0,
         showFavorites = SDB.getItem('dev-favorites') === 'true',
         alerts = [],
-        grouping = false;
+        grouping = false,
+        // ---------------
+        slicer = KIRI.slicer;
 
     if (SETUP.rm) renderMode = parseInt(SETUP.rm[0]);
     DBUG.enable();
@@ -130,6 +134,7 @@ self.kiri.copyright = exports.COPYRIGHT;
             { name: "gyroid" },
             { name: "triangle" },
             { name: "linear" },
+            { name: "bubbles2" },
             { name: "bubbles" }
         ],
         units: [
@@ -465,6 +470,15 @@ self.kiri.copyright = exports.COPYRIGHT;
         WIDGETS.slice().forEach(function(widget) {
             f(widget);
         });
+        // SCRAPS.slice().forEach(function(scrap) {
+        //     f(scrap);
+        // });
+    }
+
+    function forAllScraps(f) {
+        SCRAPS.slice().forEach(function(scrap) {
+            f(scrap);
+        });
     }
 
     function forSelectedGroups(f) {
@@ -735,6 +749,21 @@ self.kiri.copyright = exports.COPYRIGHT;
      * @param {Function} callback
      */
     function prepareSlices(callback) {
+        // console.log("prepareSlices");
+        var extractedData = slicer.prepareScrap(SCRAPS, Widget);
+        SCRAPS[SCRAPS.length-3] = extractedData;
+        for (let widgetIndex = 0; widgetIndex < KIRI.widgets.length; widgetIndex++) {
+                            
+            KIRI.widgets[widgetIndex].isScrap = true;
+            KIRI.widgets[widgetIndex].scrapDataArray = SCRAPS;
+
+            // console.log(KIRI.widgets[widgetIndex].id);
+            // console.log(KIRI.widgets[widgetIndex].ScrapDataArray);
+            // console.log(KIRI.widgets[widgetIndex].isScrap);
+        }
+
+        
+
         if (viewMode == VIEWS.ARRANGE) {
             let snap = SPACE.screenshot();
             API.view.snapshot = snap.substring(snap.indexOf(",")+1);
@@ -824,7 +853,7 @@ self.kiri.copyright = exports.COPYRIGHT;
                     totalProgress += (track[w.id] || 0);
                 });
                 setProgress((totalProgress / WIDGETS.length), msg);
-            }, true);
+            }, true, SCRAPS);
         });
     }
 
@@ -1051,6 +1080,9 @@ self.kiri.copyright = exports.COPYRIGHT;
     }
 
     function platformLoad(url, onload) {
+        console.log("It's me, platformLoad!");
+        console.log(url);
+        console.log(onload);
         if (url.toLowerCase().indexOf(".stl") > 0) {
             platform.load_stl(url, onload);
         } else {
@@ -1063,6 +1095,9 @@ self.kiri.copyright = exports.COPYRIGHT;
     }
 
     function platformLoadSTL(url, onload) {
+        console.log("It's me, platformLoadSTL!");
+        console.log(url);
+        console.log(onload);
         new MOTO.STL().load(url, function(vertices) {
             platform.add(newWidget().loadVertices(vertices));
             if (onload) onload(vertices);
@@ -1190,9 +1225,11 @@ self.kiri.copyright = exports.COPYRIGHT;
             ms[1] += mi[1];
             p = new MOTO.Pack(ms[0], ms[1], gap).fit(c);
         }
-
+        console.log(c);
         for (i = 0; i < c.length; i++) {
+            
             m = c[i];
+            console.log(m);
             m.fit.x += m.w / 2 + p.pad;
             m.fit.y += m.h / 2 + p.pad;
             m.move(p.max.w / 2 - m.fit.x, p.max.h / 2 - m.fit.y, 0, true);
@@ -1461,9 +1498,12 @@ self.kiri.copyright = exports.COPYRIGHT;
         }));
     }
 
-    function platformLoadFiles(files,group) {
+    function platformLoadFiles(files,group,isScrap) {
+        // console.log("PlatformLoad", isScrap);
         let loaded = files.length;
-        platform.group();
+        if (!isScrap) {
+            platform.group();
+        }
         for (let i=0; i<files.length; i++) {
             let reader = new FileReader(),
                 lower = files[i].name.toLowerCase(),
@@ -1479,29 +1519,147 @@ self.kiri.copyright = exports.COPYRIGHT;
                     .loadVertices(JSON.parse(e.target.result).toFloat32())
                 );
                 if (isstl) {
+                    // console.log("It's me, platformLoadFiles!");
+                    // console.log(files);
+                    // console.log(group);
+                    // console.log(API.feature.on_add_stl);
                     if (API.feature.on_add_stl) {
                         API.feature.on_add_stl(e.target.result);
-                    } else {
-                        platform.add(
-                            newWidget(undefined,group)
-                            .loadVertices(new MOTO.STL().parse(e.target.result))
-                            .saveToCatalog(e.target.file.name)
+                    } 
+                    else if (isScrap) {
+                        
+                        let vertices = new MOTO.STL().parse(e.target.result);
+                        let geometry = new THREE.BufferGeometry();
+                        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+
+                        let mesh = new THREE.Mesh(
+                            geometry,
+                            new THREE.MeshPhongMaterial({
+                                color: 0xffff00,
+                                specular: 0x181818,
+                                shininess: 100,
+                                transparent: true,
+                                opacity: 1.0
+                            })
                         );
+                        // fix invalid normals
+                        geometry.computeFaceNormals();
+                        geometry.computeVertexNormals();
+                        // to fix mirroring of normals not working as expected
+                        mesh.material.side = THREE.DoubleSide;
+                        mesh.castShadow = true;
+                        mesh.receiveShadow = true;
+                        // mesh.widget = this;
+                        // this.mesh = mesh;
+                        // invalidates points cache (like any scale/rotation)
+                        // this.center(true);
+                        // LWW TODO: Move mesh by parent move (check widget PRO center)
+
+                        SCRAPS.push(mesh);
+                        SCRAPS.push({}); // fill object later during prepareSlices
+                        SCRAPS.push(group);
+                        SCRAPS.push(SCRAPSMOVE[0]); // translation
+                        // LWW TODO: Add a number which model (modelmove/SCRAPSMOVE) this belongs to, make slicing only use those selected scraps
+                        // console.log(SCRAPS);
+
+                        // let extractedData = slicer.prepareScrap(SCRAPS, Widget);
+                        // SCRAPS[SCRAPS.length-3] = extractedData;
+                        // console.log(SCRAPS);
+
+
+
+
+                        //var scrapWidget = newWidget(undefined,group).loadVertices(new MOTO.STL().parse(e.target.result));
+                        //scrapWidget.isScrap = true;
+                        //console.log(scrapWidget);
+                        //SCRAPS.push(scrapWidget);
+                    }
+                    
+                    else {
+                        var modelWidget = newWidget(undefined,group)
+                        .loadVertices(new MOTO.STL().parse(e.target.result))
+                        .saveToCatalog(e.target.file.name);
+                        // console.log(modelWidget);
+                        platform.add(
+                            // newWidget(undefined,group)
+                            // .loadVertices(new MOTO.STL().parse(e.target.result))
+                            // .saveToCatalog(e.target.file.name)
+                            modelWidget
+                        );
+                        console.log("Loaded Widget", modelWidget);
+                        console.log("Loaded Widget BB", modelWidget.getBoundingBox());
+
+                        // LWW TODO: Also keep track fo platform position for multiple objects to slice
+
+                        // LWW TODO: Save position from other load function (+) as well
+
+                        let bb = modelWidget.getBoundingBox(true),
+                            bm = bb.min.clone(),
+                            bM = bb.max.clone(),
+                            bd = bM.sub(bm).multiplyScalar(0.5),
+                            dx = bm.x + bd.x,
+                            dy = bm.y + bd.y,
+                            dz = bm.z;
+
+                        SCRAPSMOVE = [{x: dx, y: dy, z: dz}];
                     }
                 }
                 if (isgcode) loadCode(e.target.result, 'gcode');
                 if (issvg) loadCode(e.target.result, 'svg');
                 if (isset) settingsImport(e.target.result, true);
-                if (--loaded === 0) platform.group_done(isgcode);
+                if (--loaded === 0 && !isScrap) platform.group_done(isgcode);
             };
             reader.readAsBinaryString(reader.file);
         }
     }
 
-    function loadFile() {
+    function loadFile(isScrap) {
         $('load-file').onchange = function(event) {
             DBUG.log(event);
-            platformLoadFiles(event.target.files);
+            // console.log(event);
+            platformLoadFiles(event.target.files, undefined, isScrap);
+            // console.log(event.target.files);
+            // console.log(event.target.files[0]);
+            // var localFile = new File([""], "/obj/EmptyCube.stl", {type: "stl"});
+            // console.log(localFile);
+            //var localFileList = new FileList()
+            //var localFileList = {0:localFile, length:1};
+            //platformLoadFiles([localFile]);
+            //platformLoadFiles(event.target.files);
+
+            // Used for creating a new FileList in a round-about way
+            // function FileListItem(a) {
+            //     a = [].slice.call(Array.isArray(a) ? a : arguments)
+            //     for (var c, b = c = a.length, d = !0; b-- && d;) d = a[b] instanceof File
+            //     if (!d) throw new TypeError("expected argument to FileList is File or array of File objects")
+            //     for (b = (new ClipboardEvent("")).clipboardData || new DataTransfer; c--;) b.items.add(a[c])
+            //     return b.files
+            // }
+            
+            // var files = [
+            //     new File(['content'], '/obj/EmptyCube.stl', {type: "stl"}),
+            // ];
+            
+            // //fileInput.files = new FileListItem(files)
+
+            // var localFileList = new FileListItem(files);
+            // platformLoadFiles(localFileList);
+
+            // var localFile2 = '';
+            // var xmlhttp = new XMLHttpRequest();
+            // xmlhttp.onreadystatechange = function(){
+            //     if(xmlhttp.status == 200 && xmlhttp.readyState == 4){
+            //         localFile2 = xmlhttp.responseText;
+            //         console.log("Async");
+            //         console.log(localFile2);
+            //         console.log("Async");
+            //     }
+            // };
+            // xmlhttp.open("GET","/obj/EmptyCube.stl",true);
+            // xmlhttp.send();
+            // console.log("localFile2");
+            // console.log(localFile2);
+            // console.log("localFile2");
         };
         $('load-file').click();
         // alert2("drag/drop STL files onto platform to import\nreload page to return to last saved state");

@@ -162,6 +162,8 @@ kiri.lang['en-us'] = {
     sl_lsld_l:      "solid fill areas computed\nfrom layer deltas. see\nlayer pop menu",
     sl_lbot_s:      "base layers",
     sl_lbot_l:      "number of solid layers\nto enforce at the\nbottom of the print",
+    sl_lstp_s:      "stop layer",
+    sl_lstp_l:      "where to stop mid-print",
 
     // FDM FILL
     fi_menu:        "fill",

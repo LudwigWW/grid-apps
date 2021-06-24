@@ -1239,9 +1239,12 @@ var gs_kiri_init = exports;
             wsFuncTable: UC.newTableRow([
                 [
                     UI.load =
-                    UC.newButton(LANG.fn_impo, function() { API.event.import() }, {class:"asym"}),
+                    UC.newButton(LANG.fn_impo, function() { API.event.import(false) }, {class:"asym"}),
                     UI.import =
                     UC.newButton("+", undefined, {class:"asym"})
+                ],[
+                    UI.loadScrap =
+                    UC.newButton("Load Scrap", function() { API.event.import(true) }, {class:"asym"})
                 ],[
                     UI.modeArrange =
                     UC.newButton(LANG.fn_arra, platform.layout),
@@ -1326,6 +1329,7 @@ var gs_kiri_init = exports;
             sliceTopLayers:      UC.newInput(LANG.sl_ltop_s, {title:LANG.sl_ltop_l, convert:UC.toInt, modes:FDM}),
             sliceSolidLayers:    UC.newInput(LANG.sl_lsld_s, {title:LANG.sl_lsld_l, convert:UC.toInt, modes:FDM}),
             sliceBottomLayers:   UC.newInput(LANG.sl_lbot_s, {title:LANG.sl_lbot_l, convert:UC.toInt, modes:FDM}),
+            //sliceStopLayer:      UC.newInput(LANG.sl_lstp_s, {title:LANG.sl_lstp_l, convert:UC.toInt, modes:FDM}), // LWW
 
             process:             UC.newGroup(LANG.fi_menu, control, {modes:FDM}),
             sliceFillType:       UC.newSelect(LANG.fi_type, {modes:FDM}, "infill"),

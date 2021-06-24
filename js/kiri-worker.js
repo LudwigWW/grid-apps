@@ -39,6 +39,7 @@ let dispatch = {
             vertices = new Float32Array(data.vertices),
             position = data.position,
             tracking = data.tracking,
+            scrapData = data.scrapData,
             points = Widget.verticesToPoints(vertices),
             state = data.state || {},
             rotation = state.rotation,
@@ -50,11 +51,11 @@ let dispatch = {
         }
 
         send.data({update:0.05, updateStatus:"slicing"});
-
-        let widget = kiri.newWidget(data.id).setPoints(points),
+        
+        let widget = kiri.newWidget(data.id).setPoints(points).setScrapData(scrapData),
             last = util.time(),
             now;
-
+        console.log("woker:", widget.scrapDataArray);
         // do it here so cancel can work
         cache[data.id] = widget;
 

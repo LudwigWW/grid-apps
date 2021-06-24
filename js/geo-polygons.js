@@ -26,6 +26,7 @@ var gs_base_polygons = exports;
         setWinding : setWinding,
         fillArea : fillArea,
         subtract : subtract,
+        subtract2 : subtract2,
         flatten : flatten,
         trimTo : trimTo,
         expand2 : expand2,
@@ -323,6 +324,58 @@ var gs_base_polygons = exports;
         return out;
     }
 
+
+    function subtract2(setA, setB, outA, outB, z, minArea) {
+        var clib = self.ClipperLib,
+            ctyp = clib.ClipType,
+            ptyp = clib.PolyType,
+            cfil = clib.PolyFillType,
+            clip = new clib.Clipper(),
+            ctre = new clib.PolyTree(),
+            sp1 = toClipper(setA),
+            sp2 = toClipper(setB),
+            min = minArea || 0.1,
+            out = [];
+
+        function filter(from, to) {
+            from.forEach(function(poly) {
+                if (poly.area() >= min) {
+                    to.push(poly);
+                    out.push(poly);
+                }
+            });
+        }
+
+        // expensive but worth it?
+        clip.StrictlySimple = true;
+
+        if (outA) {
+            clip.AddPaths(sp1, ptyp.ptSubject, true);
+            clip.AddPaths(sp2, ptyp.ptClip, true);
+
+            if (clip.Execute(ctyp.ctDifference, ctre, cfil.pftEvenOdd, cfil.pftEvenOdd)) {
+                cleanClipperTree(ctre);
+                filter(fromClipperTree(ctre, z, null, null, min), outA);
+            }
+        }
+
+        if (outB) {
+            if (outA) {
+                ctre.Clear();
+                clip.Clear();
+            }
+
+            clip.AddPaths(sp2, ptyp.ptSubject, true);
+            clip.AddPaths(sp1, ptyp.ptClip, true);
+
+            if (clip.Execute(ctyp.ctDifference, ctre, cfil.pftEvenOdd, cfil.pftEvenOdd)) {
+                cleanClipperTree(ctre);
+                filter(fromClipperTree(ctre, z, null, null, min), outB);
+            }
+        }
+
+        return out;
+    }
     /**
      * Slice.doProjectedFills()
      * Print.init w/ brims
@@ -419,7 +472,7 @@ var gs_base_polygons = exports;
      * @param {Function} [collector] receives output of each pass
      * @returns {Polygon[]} last offset
      */
-    function expand(polys, distance, z, out, count, distance2, collector, min) {
+    function expand(polys, distance, z, out, count, distance2, collector, min, scrapSlice) {
         // prepare alignments for clipper lib
         alignWindings(polys);
         polys.forEach(function(poly) {
@@ -428,10 +481,14 @@ var gs_base_polygons = exports;
 
         var fact = CONF.clipper,
             clib = self.ClipperLib,
+            ctyp = clib.ClipType,
             clip = clib.Clipper,
+            clip2 = new clib.Clipper(),
             cpft = clib.PolyFillType,
+            cfil = clib.PolyFillType,
             cjnt = clib.JoinType,
             cety = clib.EndType,
+            ptyp = clib.PolyType,
             coff = new clib.ClipperOffset(),
             ctre = new clib.PolyTree(),
             circ = sumCirc(polys);
@@ -469,7 +526,7 @@ var gs_base_polygons = exports;
      * @param {number} [z] defaults to 0
      * @returns {Polygon[]} last offset
      */
-    function expand2(polys, dist1, dist2, out, count, collector, thins, z) {
+    function expand2(polys, dist1, dist2, out, count, collector, thins, z, scrapSlice) {
         // prepare alignments for clipper lib
         alignWindings(polys);
         polys.forEach(function(poly) {
@@ -482,6 +539,7 @@ var gs_base_polygons = exports;
             cpft = clib.PolyFillType,
             cjnt = clib.JoinType,
             cety = clib.EndType,
+            ptyp = clib.PolyType,
             coff = new clib.ClipperOffset(),
             ctre = new clib.PolyTree(),
             orig = polys,
@@ -523,7 +581,7 @@ var gs_base_polygons = exports;
         if (out) out.appendAll(polys);
         if (collector) collector(polys, count);
         if ((count === 0 || count > 1) && polys.length > 0) {
-            expand2(polys, dist2 || dist1, dist2, out, count > 0 ? count-1 : 0, collector, thins, z);
+            expand2(polys, dist2 || dist1, dist2, out, count > 0 ? count-1 : 0, collector, thins, z, scrapSlice);
         }
 
         return polys;
@@ -593,9 +651,9 @@ var gs_base_polygons = exports;
      * @param {number} [maxLen]
      * @returns {Point[]} supplied output or new array
      */
-    function fillArea(polys, angle, spacing, output, minLen, maxLen) {
+    function fillArea(polys, scrapSlice, angle, spacing, output, minLen, maxLen) {
         if (polys.length === 0) return;
-
+        let currentZ = polys[0].points[0].z;
         var i = 1,
             p0 = polys[0],
             zpos = p0.getZ(),
@@ -634,6 +692,36 @@ var gs_base_polygons = exports;
             minlen = BASE.config.clipper * (minLen || 0),
             maxlen = BASE.config.clipper * (maxLen || 0),
             lines = [];
+        
+        
+        /**
+         * @param {Point} p1
+         * @param {Point} p2
+         * @param {Polygon | Polygon[]} polys
+         * @returns {?Point}
+         */
+        function findIntersections(p1, p2, polys, out) {
+            let i, j, ip;
+            if (Array.isArray(polys)) {
+                for (i=0; i<polys.length; i++) {
+                    findIntersections(p1, p2, polys[i], out);
+                }
+                return out;
+            }
+            let pp = polys.points,
+                pl = pp.length;
+            if (pp.length < 2) return out;
+            for (i=0; i < pl; i++) {
+                if (ip = UTIL.intersect(p1, p2, pp[i], pp[(i+1) % pl], BASE.key.SEGINT)) {
+                    out.push({ip:ip, dist2:p1.distToSq2D(ip)});
+                }
+            }
+            if (polys.inner) {
+                return findIntersections(p1, p2, polys.inner, out);
+            }
+            return out;
+        }
+
 
         // store origin as start/affinity point for fill
         rayint.origin = newPoint(start.x, start.y, start.z);
@@ -649,6 +737,33 @@ var gs_base_polygons = exports;
 
         clip.AddPaths(lines, ptyp.ptSubject, false);
         clip.AddPaths(toClipper(polys), ptyp.ptClip, true);
+        //clip.AddPaths(toClipper(polys), ptyp.ptClip, true); // LWW create new poly containing scrap and add to clipper 
+        if (scrapSlice) {
+            let scrapOutlines = []
+            scrapSlice.tops.forEach(function(scrapTop) {
+                // console.log("scrapTop", scrapTop);
+                // Fix Z height if it was slightly off
+                let scrapOutlinePoints = scrapTop.poly.points;
+                for (let pointsIndex = 0; pointsIndex < scrapOutlinePoints.length; pointsIndex++) {
+                    scrapOutlinePoints[pointsIndex].z = currentZ;
+                }
+                // Create new polygon with adjusted points and give it the correct position in the polygon hierarchie
+                let scrapOutline = BASE.newPolygon(scrapOutlinePoints);
+                scrapOutline.parent = polys[0];
+                scrapOutline.depth = -1 * polys[0].depth;
+                scrapOutline.area2 = scrapTop.poly.area2;
+                scrapOutlines.push(scrapOutline);
+                // console.log("scrapOutline", scrapOutline);
+                // LWW TODO: Add inner ones as well (remove multiple perimeters for scrap slicing)
+            });
+            if (scrapOutlines.length >= 1) {
+                clip.AddPaths(toClipper(scrapOutlines), ptyp.ptClip, true);
+            }
+            else {
+                console.log("fillArea: Did not find an Outline in scrapSlice top???");
+            }
+        }
+
 
         lines = [];
 
@@ -662,9 +777,39 @@ var gs_base_polygons = exports;
                 var p1 = newPoint(null,null,zpos,null,poly.m_polygon[0]);
                 var p2 = newPoint(null,null,zpos,null,poly.m_polygon[1]);
                 var od = rayint.origin.distToLineNew(p1,p2) / spacing;
-                lines.push([p1, p2, od]);
+                let inScrap = false;
+                if (scrapSlice) {
+                    // console.log(scrapSlice);
+                    // console.log(poly);
+                    let polyg = fromClipperNode(poly, scrapSlice.z);
+                    // console.log(polyg);
+            
+                    for (let scrapTopIndex = 0; scrapTopIndex < scrapSlice.tops.length; scrapTopIndex++) {
+                        // LWW checking if the line is fully inside scrap 
+                        if(polyg.isInside(scrapSlice.tops[scrapTopIndex].poly)) {
+                            inScrap = true;
+                            // console.log("Fill area line polygon is in scrap.")
+                            break;
+                            
+                        }
+                        // LWW checking if the line hits the scrap at all
+                        // let intersections = findIntersections(p1, p2, scrapSlice.tops[scrapTopIndex].poly, []);
+                        // console.log(intersections);
+                        // if (intersections.length >= 1) {
+                        //     inScrap = true;
+                        // }
+                        
+                    }
+                }
+                if (!inScrap) {
+                    lines.push([p1, p2, od]);
+                }
+                // lines.push([p1, p2, od]);
             });
         }
+
+
+
 
         lines.sort(function(a,b) {
             return a[2] - b[2];

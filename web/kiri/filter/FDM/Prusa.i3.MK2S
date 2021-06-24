@@ -25,6 +25,19 @@
         "G1 E-1 F900",
         "M84 ; disable motors"
     ],
+    "pause":[
+        "; Stopping now!",
+        "M300 S1200 P100 ; beep three times",
+        "M300 S0 P100",
+        "M300 S1200 P100",
+        "M300 S0 P100",
+        "M300 S1200 P100",
+        "M300 S0 P100",
+        "G1 X2.500 Y207.870 Z200.000; parking position for easy access",
+        "M1 Insert scrap now; user stop",
+        "; M105; return to current temp",
+        "M117 Insert scrap now"
+    ],
     "cmd":{
         "fan_power": "M106 S{fan_speed}"
     },

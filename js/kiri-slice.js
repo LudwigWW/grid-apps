@@ -92,6 +92,8 @@ let gs_kiri_slice = exports;
         this.layers = null;
         this.finger = null; // cached fingerprint
 
+        this.scrapSlice = null;
+
         if (view) this.addLayers(view);
     }
 
@@ -331,6 +333,129 @@ let gs_kiri_slice = exports;
     };
 
     /**
+     * Setter method for scrapSlice
+     */
+    PRO.setScrapSlice = function(sslice) {
+        this.scrapSlice = sslice;
+    };
+
+    /**
+     * clip scrap areas from perimeters
+     */
+    PRO.clipPerimeters = function() {
+        let scope = this,
+            tops = scope.tops,
+            clib = self.ClipperLib,
+            ctyp = clib.ClipType,
+            ptyp = clib.PolyType,
+            cfil = clib.PolyFillType,
+            scrapSlice = scope.scrapSlice;
+        var currentZ = scope.z;
+        // clip perimeters separately by top
+        tops.forEach(function(top) {
+            let scrapOutlines2 = [],
+                traceLines = [];
+            // prepare scrap outlines for clipping
+            if (scrapSlice) {
+                scrapSlice.tops.forEach(function(scrapTop) {
+                    // Fix Z height if it was slightly off
+                    let scrapOutlinePoints = scrapTop.poly.points;
+                    for (let pointsIndex = 0; pointsIndex < scrapOutlinePoints.length; pointsIndex++) {
+                        scrapOutlinePoints[pointsIndex].z = currentZ;
+                    }
+                    // Create new polygon with adjusted points and give it the correct position in the polygon hierarchie
+                    let scrapOutline = BASE.newPolygon(scrapOutlinePoints);
+                    scrapOutline.parent = top.poly;
+                    scrapOutline.depth = 0;
+                    scrapOutline.area2 = scrapTop.poly.area2;
+                    scrapOutlines2.push(scrapOutline);
+                    // LWW TODO: Add inner ones as well (remove multiple perimeters for scrap slicing)
+                });
+            }
+
+
+            // prepare perimeters for clipping
+            if (scrapOutlines2.length >= 1) {
+                if (top.traces) {
+                    for (let ti = 1; ti < top.traces.length; ti++) { // start at 1 to ignore outer shell
+                    // top.traces.forEach(function(topTrace) {
+                        // topTrace.setOpen(true);
+                        let topTraceLineArrays = POLY.toClipper([top.traces[ti]]);
+                        for (let tli = 0; tli < topTraceLineArrays.length; tli++) { // in case there are more than one point arrays in the trace
+                            let pointArray = [];
+                            for (let tracePoint = 0; tracePoint < topTraceLineArrays[tli].length - 0; tracePoint++) { // iterate over all points of trace
+                                // let pointArray = [];
+                                let currentPoint = topTraceLineArrays[tli][tracePoint];
+                                // let nextPoint = topTraceLineArrays[tli][tracePoint + 1];
+                                let newCurrentPoint = newPoint(currentPoint.x, currentPoint.y, currentPoint.z);
+                                // let newNextPoint = newPoint(nextPoint.x, nextPoint.y, nextPoint.z);
+                                pointArray.push(newCurrentPoint);
+                                // pointArray.push(newNextPoint);
+                                // traceLines.push(pointArray);
+                            }
+
+                            let startPoint = topTraceLineArrays[tli][0];
+                            // let endPoint = topTraceLineArrays[tli][topTraceLineArrays[tli].length - 1];
+                            let newStartPoint = newPoint(startPoint.x, startPoint.y, startPoint.z);
+                            // let newEndPoint = newPoint(endPoint.x, endPoint.y, endPoint.z);
+                            // let backToStartArray = [];
+                            // backToStartArray.push(newEndPoint);
+                            // backToStartArray.push(newStartPoint);
+                            pointArray.push(newStartPoint);
+
+                            // traceLines.push(backToStartArray);
+
+                            // console.log("topTraceLineArrays[tli]", topTraceLineArrays[tli])
+                            // console.log("pointArray", pointArray);
+                            // traceLines.push(topTraceLineArrays[tli]);
+
+                            traceLines.push(pointArray);
+
+                            // traceLines.push(backToStartArray);
+                        }
+                    // });
+                    }
+                }
+
+                // make new clipper
+                let clip2 = new clib.Clipper();
+                let ctre2 = new clib.PolyTree();
+
+                // Add LINES (perimeters) that will be clipped
+                clip2.AddPaths(traceLines, ptyp.ptSubject, false);
+                clip2.AddPaths(POLY.toClipper([top.poly]), ptyp.ptClip, true); // Need to include all other clip lines in one engulfing clip polygon first
+
+                if (scrapOutlines2.length >= 1) {
+                    // add AREAS to be clipped
+                    clip2.AddPaths(POLY.toClipper(scrapOutlines2), ptyp.ptClip, true);
+                }
+                let tracePolys = [];
+                if (clip2.Execute(ctyp.ctIntersection, ctre2, cfil.pftNonZero, cfil.pftEvenOdd)) {
+                    ctre2.m_AllPolys.forEach(function(node) {
+                        let tpoly = POLY.fromClipperNode(node, scope.z);
+                        tracePolys.push(tpoly);
+                    });
+                }
+
+                // replace old (closed) perimeters with clipped new (open) polygons
+                if (true) {
+                    if (top.traces.length > 1) top.traces = [top.traces[0]];
+                    if (!top.fill_sparse) top.fill_sparse = [];
+                    tracePolys.forEach(function(tracePoly) {
+                        // console.log("top.fill_sparse",top.fill_sparse);
+                        if (tracePoly) {
+                            top.fill_sparse.appendAll([tracePoly]);
+                            // top.fill_sparse.unshift(tracePoly);
+                            // console.log("appendAll tracePoly", [tracePoly]);
+                        }
+                    });
+                    // console.log("tracePolys", tracePolys);
+                }
+            }
+        });
+    };
+
+    /**
      * render raw slices in various formats to help debugging
      *
      * @param {number} renderMode
@@ -436,15 +561,28 @@ let gs_kiri_slice = exports;
      */
     PRO.doShells = function(count, offset1, offsetN, fillOffset, options) {
         let slice = this,
-            opt = options || {};
+            opt = options || {},
+            clib = self.ClipperLib,
+            ctyp = clib.ClipType,
+            ptyp = clib.PolyType,
+            cfil = clib.PolyFillType,
+            clip = new clib.Clipper(),
+            ctre = new clib.PolyTree(),
+            poly,
+            polys = [],
+            lines = [], // infill printer lines
+            line = [], // line in the making to add to lines
+            solids = [],
+            scrapSlice = slice.scrapSlice;
 
         slice.tops.forEach(function(top) {
             let top_poly = [ top.poly ];
 
-            if (slice.index === 0) {
+            // if (slice.index === 0) {
+                // LWW
                 // console.log({slice_top_0: top_poly, count});
                 // segment polygon
-            }
+            // }
 
             if (opt.vase) {
                 top.poly = top.poly.clone(false);
@@ -491,20 +629,20 @@ let gs_kiri_slice = exports;
                                     // nth offset
                                     let pall = POLY.nest(POLY.flatten([].appendAll(p1).appendAll(p2)).clone()),
                                         pnew1 = POLY.expand(pall, -dist, z, null, 1),
-                                        r1 = fillArea(pnew1, 45, offsetN, [], dist / 2, on2s2),
-                                        r2 = fillArea(pnew1, 135, offsetN, [], dist / 2, on2s2),
+                                        r1 = fillArea(pnew1, scrapSlice, 45, offsetN, [], dist / 2, on2s2),
+                                        r2 = fillArea(pnew1, scrapSlice, 135, offsetN, [], dist / 2, on2s2),
                                         rall = top.thin_fill.appendAll(cullIntersections(r1, r2));
                                 } else {
                                     // first offset
                                     let pall = POLY.nest(POLY.flatten([].appendAll(p1).appendAll(p2)).clone()),
                                         pnew1 = POLY.expand(pall, -dist, z, null, 1),
-                                        r1 = fillArea(pnew1, 45, offsetN, [], 0, on1s2),
-                                        r2 = fillArea(pnew1, 135, offsetN, [], 0, on1s2),
+                                        r1 = fillArea(pnew1, scrapSlice, 45, offsetN, [], 0, on1s2),
+                                        r2 = fillArea(pnew1, scrapSlice, 135, offsetN, [], 0, on1s2),
                                         rall = top.thin_fill.appendAll(cullIntersections(r1, r2));
                                 }
                                 // top.thinner.appendAll(pnew1).appendAll(pnew2);
                             },
-                            z);
+                            z, scrapSlice);
                     } else {
                         POLY.expand(
                             top_poly,
@@ -524,7 +662,7 @@ let gs_kiri_slice = exports;
                                         pi.depth = -(count - countNow);
                                     });
                                 });
-                            });
+                            }, null, scrapSlice);
                     }
                 }
             } else {
@@ -533,9 +671,54 @@ let gs_kiri_slice = exports;
 
             // generate fill offset poly set from last offset to top.inner
             if (fillOffset && last.length > 0) {
+                
+
+                // clip.AddPaths(lines, ptyp.ptSubject, false);
+                // clip.AddPaths(POLY.toClipper(polys), ptyp.ptClip, true);
+
+                // last.forEach(function(inner) {
+                //     POLY.trace2count(inner, top.inner, fillOffset, 1, 0);
+                // });
+                // LWW
+                var innerLength = 0;
+                var currentZ = top.poly.getZ();
+                //var newInnerPoly = last.clone(true);
+                var newInnerPoly = BASE.newPolygon([newPoint(-5, 5, currentZ), newPoint(-5, -5, currentZ), newPoint(5, -5, currentZ), newPoint(5, 5, currentZ)]);
+                var newInnerPolyData = BASE.newPolygon([newPoint(-5, 5, currentZ), newPoint(-5, -5, currentZ), newPoint(5, -5, currentZ), newPoint(5, 5, currentZ)]);
+                if(false) {
+                    newInnerPoly.inner = null;
+                    newInnerPoly.area2 = newInnerPolyData.area2;
+                    newInnerPoly.id = newInnerPolyData.id;
+                    newInnerPoly.length = newInnerPolyData.length;
+                    newInnerPoly.open = newInnerPolyData.open;
+                    newInnerPoly.perim = newInnerPolyData.perim;
+                }
+                newInnerPoly.parent = last[0];
+                newInnerPoly.depth = -1 * last[0].depth;
+                
+                if(false) {
+                    if (last[0].inner != null) {
+                        innerLength = last[0].inner.length;
+                        last[0].inner.append(newInnerPoly);
+                    }
+                    else {
+                        last[0].inner = [newInnerPoly];
+                    }
+                }
+
                 last.forEach(function(inner) {
                     POLY.trace2count(inner, top.inner, fillOffset, 1, 0);
                 });
+                
+                
+
+
+                
+                // console.log("infill shell, inner polygons:" + innerLength);
+                // console.log(last);
+                // console.log("top");
+                // console.log(top);
+                
             }
         });
     };
@@ -602,19 +785,24 @@ let gs_kiri_slice = exports;
      */
     PRO.doSolidLayerFill = function(spacing, angle) {
         this.isSolidFill = false;
+        let scrapSlice = this.scrapSlice;
 
         if (this.tops.length === 0) return;
         if (typeof(angle) != 'number') return;
 
         this.tops.forEach(function(top) {
             if (top.inner && top.inner.length > 0) {
-                top.fill_lines = fillArea(top.inner, angle, spacing, null);
+                top.fill_lines = fillArea(top.inner, scrapSlice, angle, spacing, null);
             } else {
                 top.fill_lines = null;
             }
         });
 
         this.isSolidFill = true;
+
+        if (scrapSlice) {
+            this.clipPerimeters();
+        }
     };
 
     /**
@@ -642,6 +830,8 @@ let gs_kiri_slice = exports;
      * Take output from pluggable sparse infill algorithm and clip to
      * the bounds of the top polygons and their inner solid areas.
      */
+
+
     PRO.doSparseLayerFill = function(options) {
         let process = options.process,
             spacing = options.spacing,  // spacing space between fill lines
@@ -666,9 +856,11 @@ let gs_kiri_slice = exports;
             ctre = new clib.PolyTree(),
             poly,
             polys = [],
-            lines = [],
-            line = [],
+            polysWScrap = [],
+            lines = [], // infill printer lines
+            line = [], // line in the making to add to lines
             solids = [],
+            scrapSlice = scope.scrapSlice,
             // callback passed to pluggable infill algorithm
             target = {
                 slice: function() { return scope },
@@ -708,35 +900,56 @@ let gs_kiri_slice = exports;
             top.fill_sparse = [];
             polys.appendAll(top.inner);
             polys.appendAll(top.solids);
+            // polysWScrap.appendAll(top.inner);
+            // polysWScrap.appendAll(top.solids);
+            // console.log(top.inner);
+            // console.log(top.solids);
+            // console.log(top);
         });
 
+        // if (scrapSlice) {
+        //     scrapSlice.tops.forEach(function(top) {
+        //         polysWScrap.appendAll([top.poly]);
+        //     });
+        // }
+
+
         scope._fill_finger = POLY.fingerprint(polys);
+        // scope._fill_finger = POLY.fingerprint(polysWScrap);
+        // LWW TODO: make another array which inclused scrapslice polygons for fingerprinting
 
         let skippable = FILLFIXED[type] ? true : false;
         let miss = false;
-        // if the layer below has the same fingerprint, we may be able to clone its infill
-        if (skippable && scope.fingerprintSame(down)) {
-            // the fill fingerprint can slightly different because of solid projections
-            if (down._fill_finger && POLY.fingerprintCompare(scope._fill_finger, down._fill_finger)) {
-                for (let i=0; i<tops.length; i++) {
-                    // the layer below may not have infill computed if it's solid
-                    if (down.tops[i].fill_sparse) {
-                        tops[i].fill_sparse = down.tops[i].fill_sparse.map(poly => {
-                            return poly.clone().setZ(scope.z);
-                        });
-                    } else {
-                        miss = true;
+
+        // if the layer below has the same fingerprint, we may be able to clone its infill // LWW avoid optimization if the layer has scrap.
+        // console.log(scrapSlice)
+        if (false) { //LWW TODO restore optimization
+            if (!scrapSlice && (down || !down.scrapSlice)) {
+                if (skippable && scope.fingerprintSame(down)) {
+                    // the fill fingerprint can slightly different because of solid projections
+                    if (down._fill_finger && POLY.fingerprintCompare(scope._fill_finger, down._fill_finger)) {
+                        for (let i=0; i<tops.length; i++) {
+                            // the layer below may not have infill computed if it's solid
+                            if (down.tops[i].fill_sparse) {
+                                tops[i].fill_sparse = down.tops[i].fill_sparse.map(poly => {
+                                    return poly.clone().setZ(scope.z);
+                                });
+                            } else {
+                                miss = true;
+                            }
+                        }
+                        // if any of the fills as missing from below, re-compute
+                        if (!miss) {
+                            return;
+                        }
                     }
-                }
-                // if any of the fills as missing from below, re-compute
-                if (!miss) {
-                    return;
                 }
             }
         }
 
         let sparse_clip = scope.isSparseFill;
 
+        // LWW TODO: make use of mask function to remove infill/solid-infill
         // solid fill areas
         if (solids.length) {
             tops.forEach(top => {
@@ -768,7 +981,7 @@ let gs_kiri_slice = exports;
                         });
                     }
                     if (fillable.length) {
-                        let lines = POLY.fillArea(fillable, angl, options.lineWidth);
+                        let lines = POLY.fillArea(fillable, scrapSlice, angl, options.lineWidth);
                         top.fill_lines.appendAll(lines);
                     }
                 });
@@ -783,15 +996,128 @@ let gs_kiri_slice = exports;
         clip.AddPaths(lines, ptyp.ptSubject, false);
         clip.AddPaths(POLY.toClipper(polys), ptyp.ptClip, true);
 
+        var currentZ = scope.z;
+        
+        // LWW TODO: Do we need to do this for all tops?
+        if (scrapSlice) {
+            let scrapOutlines = []
+            scrapSlice.tops.forEach(function(scrapTop) {
+                // Fix Z height if it was slightly off
+                let scrapOutlinePoints = scrapTop.poly.points;
+                for (let pointsIndex = 0; pointsIndex < scrapOutlinePoints.length; pointsIndex++) {
+                    scrapOutlinePoints[pointsIndex].z = currentZ;
+                }
+                // Create new polygon with adjusted points and give it the correct position in the polygon hierarchie
+                let scrapOutline = BASE.newPolygon(scrapOutlinePoints);
+                scrapOutline.parent = polys[0];
+                scrapOutline.depth = -1 * polys[0].depth;
+                scrapOutline.area2 = scrapTop.poly.area2;
+                scrapOutlines.push(scrapOutline);
+                // LWW TODO: Add inner ones as well (remove multiple perimeters for scrap slicing)
+            });
+            if (scrapOutlines.length >= 1) {
+                clip.AddPaths(POLY.toClipper(scrapOutlines), ptyp.ptClip, true);
+            }
+            else {
+                console.log("Did not find an Outline in scrapSlice top???");
+            }
+        }
+
         if (clip.Execute(ctyp.ctIntersection, ctre, cfil.pftNonZero, cfil.pftEvenOdd)) {
             ctre.m_AllPolys.forEach(function(node) {
                 poly = POLY.fromClipperNode(node, scope.z);
                 tops.forEach(function(top) {
+                    let inScrap = false;
+                    if (scrapSlice) {
+                        for (let scrapTopIndex = 0; scrapTopIndex < scrapSlice.tops.length; scrapTopIndex++) {
+                            if(poly.isInside(scrapSlice.tops[scrapTopIndex].poly)) {
+                                inScrap = true;
+                                break;
+                            }
+                        }
+                    }
                     // use only polygons inside this top
-                    if (poly.isInside(top.poly)) {
+                    if (poly.isInside(top.poly) && !inScrap) {
                         top.fill_sparse.push(poly);
                     }
                 });
+            });
+        }
+        // if (tops[0].fill_lines) console.log("fill_sparse", tops[0].fill_sparse);
+        // if (tops[0].fill_lines) console.log("fill_lines", tops[0].fill_lines);
+
+        if (scrapSlice) {
+            scope.clipPerimeters();
+        }
+
+        if (false) {
+            console.log(scope);
+            // clip perimeters separately by top
+            tops.forEach(function(top) {
+                let scrapOutlines2 = [],
+                    traceLines = [];
+                // prepare scrap outlines for clipping
+                if (scrapSlice) {
+                    scrapSlice.tops.forEach(function(scrapTop) {
+                        // Fix Z height if it was slightly off
+                        let scrapOutlinePoints = scrapTop.poly.points;
+                        for (let pointsIndex = 0; pointsIndex < scrapOutlinePoints.length; pointsIndex++) {
+                            scrapOutlinePoints[pointsIndex].z = currentZ;
+                        }
+                        // Create new polygon with adjusted points and give it the correct position in the polygon hierarchie
+                        let scrapOutline = BASE.newPolygon(scrapOutlinePoints);
+                        scrapOutline.parent = top.poly;
+                        scrapOutline.depth = 0;
+                        scrapOutline.area2 = scrapTop.poly.area2;
+                        scrapOutlines2.push(scrapOutline);
+                        // LWW TODO: Add inner ones as well (remove multiple perimeters for scrap slicing)
+                    });
+                }
+
+
+                // prepare perimeters for clipping
+                if (scrapOutlines2.length >= 1) {
+                    if (top.traces) {
+                        top.traces.forEach(function(topTrace) {
+                            let topTraceLineArrays = POLY.toClipper([topTrace]);
+                            for (let tli = 0; tli < topTraceLineArrays.length; tli++) {
+                                let startPoint = topTraceLineArrays[tli][0];
+                                let endPoint = topTraceLineArrays[tli][topTraceLineArrays[tli].length - 1];
+                                let repeatStartPoint = newPoint(startPoint.x, startPoint.y, startPoint.z);
+                                let repeatEndPoint = newPoint(endPoint.x, endPoint.y, endPoint.z);
+                                let backToStartArray = [];
+                                backToStartArray.push(repeatEndPoint);
+                                backToStartArray.push(repeatStartPoint);
+
+                                traceLines.push(topTraceLineArrays[tli]);
+                                traceLines.push(backToStartArray);
+                            }
+                        });
+                    }
+
+                    // make new clipper
+                    let clip2 = new clib.Clipper();
+                    let ctre2 = new clib.PolyTree();
+
+                    // Add LINES (perimeters) that will be clipped
+                    clip2.AddPaths(traceLines, ptyp.ptSubject, false);
+                    clip2.AddPaths(POLY.toClipper([top.poly]), ptyp.ptClip, true); // Need to include all other clip lines in one engulfing clip polygon first
+
+                    if (scrapOutlines2.length >= 1) {
+                        // add AREAS to be clipped
+                        clip2.AddPaths(POLY.toClipper(scrapOutlines2), ptyp.ptClip, true);
+                    }
+                    let tracePolys = [];
+                    if (clip2.Execute(ctyp.ctIntersection, ctre2, cfil.pftNonZero, cfil.pftEvenOdd)) {
+                        ctre2.m_AllPolys.forEach(function(node) {
+                            let tpoly = POLY.fromClipperNode(node, scope.z);
+                            tracePolys.push(tpoly);
+                        });
+                    }
+
+                    // replace old (closed) perimeters with clipped new (open) polygons
+                    top.traces = tracePolys;
+                }
             });
         }
     };
@@ -931,7 +1257,8 @@ let gs_kiri_slice = exports;
             tops = scope.tops,
             solids = scope.solids,
             unioned = POLY.union(solids.poly),
-            isSLA = (spacing === undefined && angle === undefined);
+            isSLA = (spacing === undefined && angle === undefined),
+            scrapSlice = scope.scrapSlice;
 
         if (solids.length === 0) return false;
         if (unioned.length === 0) return false;
@@ -996,13 +1323,13 @@ let gs_kiri_slice = exports;
                 }
             });
             if (tofill.length > 0) {
-                fillArea(tofill, angle, spacing, top.fill_lines);
+                fillArea(tofill, scrapSlice, angle, spacing, top.fill_lines);
                 top.fill_lines_norm = {angle:angle,spacing:spacing};
             }
             if (angfill.length > 0) {
                 top.fill_lines_ang = {spacing:spacing,list:[],poly:[]};
                 angfill.forEach(function(af) {
-                    fillArea([af], af.fillang.angle + 45, spacing, top.fill_lines);
+                    fillArea([af], scrapSlice, af.fillang.angle + 45, spacing, top.fill_lines);
                     top.fill_lines_ang.list.push(af.fillang.angle + 45);
                     top.fill_lines_ang.poly.push(af.clone());
                 });
@@ -1189,7 +1516,8 @@ let gs_kiri_slice = exports;
             supports = slice.supports,
             nsB = [],
             nsC = [],
-            min = minArea || 0.1;
+            min = minArea || 0.1,
+            scrapSlice = slice.scrapSlice;
 
         // create support clip offset
         // POLY.expand(slice.gatherTopPolys([]), offset, slice.z, slice.offsets = []);
@@ -1218,7 +1546,7 @@ let gs_kiri_slice = exports;
             // offset support poly for fill lines
             POLY.trace2count(poly, offsets, linewidth/4, 1, 0);
             // do the fill
-            if (offsets.length > 0) fillArea(offsets, angle, spacing, poly.fills = []);
+            if (offsets.length > 0) fillArea(offsets, scrapSlice, angle, spacing, poly.fills = []);
             return true;
         });
 
@@ -1393,6 +1721,10 @@ let gs_kiri_slice = exports;
 
     function newTop(poly) {
         return new Top(poly);
+    }
+
+    function newScrap(poly) {
+        return new Scrap(poly);
     }
 
     /**
